@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stage 3 Evaluation Dashboard — LegacyRetailPortfolio</title>
+<style>
+  :root{--bg:#0f1420;--card:#1a2233;--ink:#e8edf6;--mut:#9fb0c9;--good:#3fb96b;--warn:#e7b63b;--bad:#e2574c;--bar:#2b3a57;--accent:#5aa9ff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.45}
+  header{padding:28px 32px;border-bottom:1px solid #26324a}
+  h1{margin:0 0 4px;font-size:22px}
+  .sub{color:var(--mut);font-size:13px}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px 32px 56px}
+  .grid{display:grid;gap:16px}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  .cols-2{grid-template-columns:repeat(2,1fr)}
+  .card{background:var(--card);border:1px solid #26324a;border-radius:12px;padding:18px 20px}
+  .card h2{margin:0 0 12px;font-size:14px;letter-spacing:.3px;color:var(--mut);text-transform:uppercase}
+  .big{font-size:40px;font-weight:700}
+  .big small{font-size:15px;color:var(--mut);font-weight:400}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .row .lbl{flex:0 0 190px;font-size:13px;color:var(--ink)}
+  .track{flex:1;background:var(--bar);height:14px;border-radius:7px;overflow:hidden}
+  .fill{height:100%;border-radius:7px}
+  .val{flex:0 0 58px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #26324a}
+  th{color:var(--mut);font-weight:600}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px}
+  .pill.good{background:rgba(63,185,107,.15);color:var(--good)}
+  .pill.warn{background:rgba(231,182,59,.15);color:var(--warn)}
+  .pill.bad{background:rgba(226,87,76,.15);color:var(--bad)}
+  .cm{display:grid;grid-template-columns:auto 1fr 1fr 1fr;gap:6px;font-size:13px}
+  .cm div{padding:8px 10px;background:var(--bar);border-radius:6px;text-align:center}
+  .cm .hd{background:transparent;color:var(--mut);font-weight:600}
+  .cm .diag{outline:2px solid var(--good)}
+  .cm .miss{outline:2px solid var(--bad)}
+  .note{color:var(--mut);font-size:12px;margin-top:10px}
+  footer{color:var(--mut);font-size:12px;padding:0 32px 32px;max-width:1100px;margin:0 auto}
+  .section-title{margin:26px 0 10px;font-size:13px;letter-spacing:.4px;color:var(--mut);text-transform:uppercase}
+</style>
+</head>
+<body>
+<header>
+  <h1>Stage 3 Evaluation Dashboard</h1>
+  <div class="sub">LegacyRetailPortfolio (.NET 10) &middot; AI reverse-engineering accuracy vs withheld ground truth &middot; generated from <code>scorecard.yaml</code> (deterministic). Works offline.</div>
+</header>
+<div class="wrap">
+
+  <div class="grid cols-3">
+    <div class="card">
+      <h2>Weighted overall</h2>
+      <div class="big">95.5<small>%</small></div>
+      <div class="note">Weighted across 6 categories. Workflow reported separately as diagnostic.</div>
+    </div>
+    <div class="card">
+      <h2>Discovery completeness</h2>
+      <div class="big">100<small>% recall</small></div>
+      <div class="note">0 fully-missed capabilities, rules, entities, dependencies, or cross-app workflows.</div>
+    </div>
+    <div class="card">
+      <h2>Fabricated findings</h2>
+      <div class="big">0</div>
+      <div class="note">No invented business relationships; no shared-DB access mis-reported as code dependency.</div>
+    </div>
+  </div>
+
+  <div class="section-title">Category scores (normalized 0&ndash;1, weighted)</div>
+  <div class="card">
+    <div class="row"><div class="lbl">Capability discovery (25%)</div><div class="track"><div class="fill" style="width:98.0%;background:var(--good)"></div></div><div class="val">0.980</div></div>
+    <div class="row"><div class="lbl">Domain &amp; entity (20%)</div><div class="track"><div class="fill" style="width:100%;background:var(--good)"></div></div><div class="val">1.000</div></div>
+    <div class="row"><div class="lbl">Overlap classification (20%)</div><div class="track"><div class="fill" style="width:82.5%;background:var(--warn)"></div></div><div class="val">0.825</div></div>
+    <div class="row"><div class="lbl">Business rules (15%)</div><div class="track"><div class="fill" style="width:100%;background:var(--good)"></div></div><div class="val">1.000</div></div>
+    <div class="row"><div class="lbl">Cross-app dependencies (10%)</div><div class="track"><div class="fill" style="width:100%;background:var(--good)"></div></div><div class="val">1.000</div></div>
+    <div class="row"><div class="lbl">Evidence accuracy (10%)</div><div class="track"><div class="fill" style="width:95.5%;background:var(--good)"></div></div><div class="val">0.955</div></div>
+  </div>
+
+  <div class="section-title">Precision / Recall / F1 by category</div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Category</th><th class="num">TP</th><th class="num">FP</th><th class="num">FN</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th><th>Policy</th></tr></thead>
+      <tbody>
+        <tr><td>Capability</td><td class="num">21</td><td class="num">1</td><td class="num">0</td><td class="num">0.75</td><td class="num">1.00</td><td class="num">0.857</td><td>strict (exact-only)</td></tr>
+        <tr><td>Capability</td><td class="num">24.0</td><td class="num">1</td><td class="num">0</td><td class="num">0.96</td><td class="num">1.00</td><td class="num">0.980</td><td>partial-credit</td></tr>
+        <tr><td>Business rule</td><td class="num">19</td><td class="num">0</td><td class="num">0</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td><td>exact</td></tr>
+        <tr><td>Entity (tables)</td><td class="num">40</td><td class="num">0</td><td class="num">0</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td><td>discovery</td></tr>
+        <tr><td>Overlap (discovery)</td><td class="num">6</td><td class="num">1</td><td class="num">0</td><td class="num">0.857</td><td class="num">1.00</td><td class="num">0.923</td><td>discovery</td></tr>
+        <tr><td>Overlap (classification)</td><td class="num">4</td><td class="num">1</td><td class="num">2</td><td class="num">0.571</td><td class="num">1.00</td><td class="num">0.727</td><td>class. hit/miss</td></tr>
+        <tr><td>Dependency</td><td class="num">10.5</td><td class="num">0</td><td class="num">0</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td><td>partial-credit</td></tr>
+        <tr><td>Workflow (cross-app)</td><td class="num">3.5</td><td class="num">0</td><td class="num">0</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td><td>diagnostic</td></tr>
+      </tbody>
+    </table>
+    <div class="note">Strict counts only <code>exact</code> as a hit; partial-credit gives <code>partial</code>=0.5. Zero-denominator metrics are reported null elsewhere (none here).</div>
+  </div>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Overlap confusion matrix (6 GT scenarios)</div>
+      <div class="cm">
+        <div class="hd"></div><div class="hd">pred: partial_overlap</div><div class="hd">pred: complementary</div><div class="hd">row total</div>
+        <div class="hd" style="text-align:left">GT broadly-shared</div><div class="miss">2</div><div>0</div><div>2</div>
+        <div class="hd" style="text-align:left">GT partial-overlap</div><div class="diag">3</div><div class="diag">1</div><div>4</div>
+      </div>
+      <div class="note">Green = accepted-equivalent tier. Red = under-classification (broadly-shared &rarr; partial_overlap): SCN-1 customer, SCN-6 shipment. Totals reconcile to 6.</div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Stage 1 vs Stage 2</div>
+      <table>
+        <tbody>
+          <tr><td>Stage 1 capabilities (granular)</td><td class="num">47</td></tr>
+          <tr><td>Stage 2 canonical capabilities</td><td class="num">15</td></tr>
+          <tr><td>Consolidation loss (fully)</td><td class="num"><span class="pill good">0</span></td></tr>
+          <tr><td>Under-surfaced at portfolio layer</td><td class="num"><span class="pill warn">2</span></td></tr>
+          <tr><td>Portfolio-only findings (cross-app)</td><td class="num">7 deps + 4 wf</td></tr>
+          <tr><td>Fabricated by Stage 2</td><td class="num"><span class="pill good">0</span></td></tr>
+        </tbody>
+      </table>
+      <div class="note">AUTH + cancel-override under-surfaced; DEP-REPORT-JOIN required portfolio view.</div>
+    </div>
+  </div>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Evidence validation (sampled)</div>
+      <table>
+        <tbody>
+          <tr><td>Valid</td><td class="num"><span class="pill good">20</span></td></tr>
+          <tr><td>Partially supporting</td><td class="num"><span class="pill warn">2</span></td></tr>
+          <tr><td>Invalid</td><td class="num"><span class="pill good">0</span></td></tr>
+          <tr><td>Missing</td><td class="num"><span class="pill good">0</span></td></tr>
+          <tr><td>Not checked</td><td class="num">158</td></tr>
+          <tr><td>Validity rate (of checked)</td><td class="num">95.5%</td></tr>
+        </tbody>
+      </table>
+      <div class="note">All 5 stored procs + THROW codes (50014/50021/50022/50031) verified in procedures.sql.</div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0">False positives / negatives</div>
+      <table>
+        <thead><tr><th>Axis</th><th class="num">FP</th><th class="num">FN (full)</th><th class="num">Partial</th></tr></thead>
+        <tbody>
+          <tr><td>Capability</td><td class="num">1</td><td class="num">0</td><td class="num">6</td></tr>
+          <tr><td>Rule</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Entity</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Overlap</td><td class="num">1</td><td class="num">0</td><td class="num">2</td></tr>
+          <tr><td>Dependency</td><td class="num">0</td><td class="num">0</td><td class="num">1</td></tr>
+          <tr><td>Workflow</td><td class="num">0</td><td class="num">0</td><td class="num">1</td></tr>
+        </tbody>
+      </table>
+      <div class="note">Only FP: PF-CAP-ORDER-VIEW (real read pattern, not a GT shared capability).</div>
+    </div>
+  </div>
+
+  <div class="section-title">Outstanding adjudications</div>
+  <div class="card">
+    <table>
+      <thead><tr><th>ID</th><th>Topic</th><th>Provisional</th><th>Severity</th></tr></thead>
+      <tbody>
+        <tr><td>ADJ-1</td><td>broadly-shared vs partial_overlap (SCN-1, SCN-6)</td><td>classification miss</td><td><span class="pill warn">medium</span></td></tr>
+        <tr><td>ADJ-2</td><td>returns: complementary vs partial-overlap</td><td>accepted hit</td><td><span class="pill good">low</span></td></tr>
+        <tr><td>ADJ-3</td><td>PF-CAP-ORDER-VIEW as shared capability</td><td>false positive</td><td><span class="pill good">low</span></td></tr>
+        <tr><td>ADJ-5</td><td>two off-by-one Stage 1 ID references</td><td>partially_supporting</td><td><span class="pill good">low</span></td></tr>
+        <tr><td>ADJ-6</td><td>WF-D participant superset</td><td>partial</td><td><span class="pill good">low</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">See <code>adjudication-queue.yaml</code>. Sensitivity: resolving ADJ-1/ADJ-2 as matches would lift overlap toward ~0.95.</div>
+  </div>
+
+</div>
+<footer>
+  Deterministic scoring by <code>score.py</code> &middot; ground-truth version 1 &middot; prediction version 1 &middot;
+  no source or prediction artifacts modified. Figures mirror <code>scorecard.yaml</code> and <code>confusion-matrix.csv</code>.
+</footer>
+</body>
+</html>

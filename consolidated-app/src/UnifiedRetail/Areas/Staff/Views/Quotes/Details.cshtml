@@ -1,0 +1,46 @@
+@model OrderDesk.Domain.SalesQuote
+@{
+    ViewData["Title"] = Model.QuoteNumber;
+}
+<h1>Quote @Model.QuoteNumber</h1>
+<div class="card">
+    <p><strong>Customer:</strong> @Model.Customer?.FullName · <strong>Status:</strong> @Model.QuoteStatus · <strong>Discount:</strong> @Model.DiscountPercent%</p>
+    <p><strong>Subtotal:</strong> @Model.SubTotal.ToString("C") · <strong>Total:</strong> @Model.GrandTotal.ToString("C") · <strong>Expires:</strong> @Model.ExpiresUtc.ToString("yyyy-MM-dd")</p>
+</div>
+
+<h3>Lines</h3>
+<table>
+    <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Line</th></tr></thead>
+    <tbody>
+    @foreach (var l in Model.Lines)
+    {
+        <tr><td>@(l.Product?.Name ?? ("#" + l.ProductId))</td><td>@l.Quantity</td><td>@l.UnitPrice.ToString("C")</td><td>@l.LineTotal.ToString("C")</td></tr>
+    }
+    </tbody>
+</table>
+
+<div class="card">
+    <h3>Add line</h3>
+    <form class="inline" method="post" asp-action="AddLine" asp-route-id="@Model.SalesQuoteId">
+        @Html.AntiForgeryToken()
+        <input name="productId" type="number" placeholder="productId" required />
+        <input name="quantity" type="number" value="1" min="1" style="width:70px" />
+        <button class="btn secondary" type="submit">Add</button>
+    </form>
+</div>
+<div class="card">
+    <h3>Apply discount</h3>
+    <form class="inline" method="post" asp-action="ApplyDiscount" asp-route-id="@Model.SalesQuoteId">
+        @Html.AntiForgeryToken()
+        <input name="discountPercent" type="number" step="0.01" placeholder="%" required style="width:90px" />
+        <button class="btn secondary" type="submit">Apply</button>
+    </form>
+    <p style="color:#64748b;font-size:13px">&gt; 15% routes to a discount approval; otherwise auto-approves.</p>
+</div>
+<div class="card">
+    <form method="post" asp-action="Convert" asp-route-id="@Model.SalesQuoteId">
+        @Html.AntiForgeryToken()
+        <button class="btn" type="submit">Convert to order</button>
+    </form>
+    <p style="color:#64748b;font-size:13px">Only Approved, non-expired, not-yet-converted quotes convert (SQL proc).</p>
+</div>

@@ -1,0 +1,36 @@
+@model Wishlist
+@{
+    ViewData["Title"] = "Wishlist";
+}
+<h2>@Model.Name</h2>
+@if (Model.Items.Count == 0)
+{
+    <p>Your wishlist is empty.</p>
+}
+else
+{
+    <table class="table">
+        <thead><tr><th>Product</th><th>Price</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var i in Model.Items)
+        {
+            <tr>
+                <td>@i.Product?.Name</td>
+                <td>@((i.Product?.UnitPrice ?? 0).ToString("C"))</td>
+                <td>
+                    <form asp-controller="Cart" asp-action="Add" method="post" class="d-inline">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="productId" value="@i.ProductId" />
+                        <button class="btn btn-sm btn-primary">Add to cart</button>
+                    </form>
+                    <form asp-action="Remove" method="post" class="d-inline">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="productId" value="@i.ProductId" />
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

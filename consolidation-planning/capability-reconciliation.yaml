@@ -1,0 +1,237 @@
+# Capability Reconciliation — overlaps across apps and how to consolidate them.
+# Sources: Stage 2 capability-overlaps.yaml (OVL-*/DUP-*), business-rule-comparison.yaml, Stage 3 findings.
+# recommendation: unify_implementation | unify_with_policy_split | keep_separate | keep_duplicate_consolidate_expression
+# Differences are NOT treated as defects by default; intentional divergences are preserved.
+version: 1
+
+reconciliations:
+  - id: RECON-CUSTOMER
+    concept: Customer record management
+    stage2_ref: OVL-CUSTOMER
+    gt_class: broadly-shared
+    participants: [OrderDesk, CustomerPortal, FulfillmentAPI]
+    common_behavior: All read/act on the one dbo.Customers row (one business customer).
+    app_specific_behavior:
+      OrderDesk: Full contact + shipping edit (CustomerService.UpdateContactAsync).
+      CustomerPortal: Self-service subset only — phone + shipping; never name/email/status (ProfileService.UpdateSelfServiceAsync).
+      FulfillmentAPI: Reads shipping fields only (inside activity report).
+    duplicated_logic: None material; editable field sets differ by design.
+    business_rule_differences:
+      - "Staff may edit all fields; customer may edit only phone+shipping (CP-RULE-003)."
+      - "Email required + unique for staff edit (OD-RULE-020)."
+    recommendation: unify_with_policy_split
+    unify: Single Customer domain + repository + one dbo.Customers mapping.
+    keep_context_specific: >
+      Two application-service operations (StaffUpdateContact vs SelfServiceUpdate) enforcing
+      different editable field sets. Do NOT collapse into one "update customer" that lets
+      customers edit restricted fields.
+    stakeholder_approval_required: false
+    evidence: [OVL-CUSTOMER, CP-RULE-003, OD-RULE-020]
+
+  - id: RECON-CATALOG
+    concept: Product catalog browsing
+    stage2_ref: OVL-CATALOG
+    gt_class: broadly-shared
+    participants: [OrderDesk, CustomerPortal]
+    common_behavior: Both read dbo.Products filtering !IsDiscontinued.
+    app_specific_behavior:
+      OrderDesk: Staff surface, shows availability for quoting (cap 300).
+      CustomerPortal: Public/anonymous surface, category filter, cap 200.
+    duplicated_logic: The non-discontinued read query + availability read.
+    business_rule_differences: [Result caps differ (300 staff vs 200 public); anonymous access only in CP.]
+    recommendation: unify_implementation
+    unify: One CatalogQuery service (non-discontinued filter + availability projection) with a result-cap parameter and an anonymous-allowed flag.
+    keep_context_specific: Presentation (staff grid vs public storefront) and the anonymous-access policy.
+    stakeholder_approval_required: false
+    evidence: [OVL-CATALOG, OD-RULE-011, CP-RULE-004]
+
+  - id: RECON-INVENTORY
+    concept: Inventory availability
+    stage2_ref: OVL-INVENTORY
+    gt_class: partial-overlap
+    participants: [OrderDesk, CustomerPortal, FulfillmentAPI]
+    common_behavior: available = QuantityOnHand - QuantityAllocated (expression duplicated 3x — DUP-AVAIL).
+    app_specific_behavior:
+      OrderDesk: Read-only pre-order check.
+      CustomerPortal: Display + authoritative recheck at checkout.
+      FulfillmentAPI: The ONLY writer — physical reservation via usp_AllocateInventory.
+    duplicated_logic: The availability EXPRESSION (DUP-AVAIL). Correctly NOT a duplicated capability.
+    business_rule_differences: [Read-only check vs recheck vs stateful allocation.]
+    recommendation: keep_duplicate_consolidate_expression
+    unify: >
+      Centralize the available = OnHand - Allocated computation in one shared domain value/function
+      (removes the 3x expression duplication) WITHOUT merging the three uses. Allocation stays the
+      sole mutating path (usp_AllocateInventory).
+    keep_context_specific: Pre-order check, checkout recheck, and physical allocation remain distinct operations.
+    stakeholder_approval_required: false
+    evidence: [OVL-INVENTORY, DUP-AVAIL, OD-RULE-007, CP-RULE-011, FA-RULE-003]
+
+  - id: RECON-ORDER-CREATE
+    concept: Order creation
+    stage2_ref: OVL-ORDER-CREATE
+    gt_class: partial-overlap
+    participants: [OrderDesk, CustomerPortal]
+    common_behavior: Both create dbo.Orders/OrderLines (Confirmed).
+    app_specific_behavior:
+      OrderDesk: Quote conversion (SQL proc) OR staff order with stock pre-check; OrderSource='OrderDesk'.
+      CustomerPortal: Idempotent cart checkout; OrderSource='CustomerPortal'; coupon discount.
+    duplicated_logic: Mandatory-customer-info guard (see RECON-MANDATORY); order/line insert shape.
+    business_rule_differences:
+      - "Entry path + validations differ (quote/staff vs cart/idempotency+coupon)."
+      - "OrderSource value differs and MUST be retained (drives reporting classification FA-RULE-022)."
+    recommendation: unify_with_policy_split
+    unify: One Order aggregate + one "create order" domain core (line totals, status=Confirmed, OrderSource stamp).
+    keep_context_specific: Two application services (StaffOrderService / CheckoutService) with their own preconditions (stock pre-check vs idempotency+recheck+coupon).
+    stakeholder_approval_required: false
+    evidence: [OVL-ORDER-CREATE, OD-CAP-009, OD-CAP-010, CP-CAP-009]
+
+  - id: RECON-ORDER-VIEW
+    concept: Order lookup / history
+    stage2_ref: OVL-ORDER-VIEW
+    gt_class: "none (Stage 3 flagged this as an extra/over-segmented shared capability)"
+    participants: [OrderDesk, CustomerPortal, FulfillmentAPI]
+    common_behavior: All read dbo.Orders.
+    app_specific_behavior:
+      OrderDesk: Unrestricted staff read.
+      CustomerPortal: Ownership-filtered (own orders only).
+      FulfillmentAPI: Status-filtered work queue (Confirmed/Allocated).
+    duplicated_logic: Order read projection.
+    business_rule_differences: [Read SCOPE differs per actor (unrestricted / ownership / status-queue).]
+    recommendation: unify_with_policy_split
+    unify: One OrderQuery with an explicit scope parameter (All / OwnedBy(customerId) / WorkQueue).
+    keep_context_specific: >
+      The ownership filter for customers (CP-RULE-014) and the work-queue filter for fulfillment MUST
+      be enforced; do not expose unrestricted order reads to customers. Stage 3 noted OVL-ORDER-VIEW was an
+      over-segmentation vs ground truth — in the target it is simply a scoped query, not a headline capability.
+    stakeholder_approval_required: false
+    evidence: [OVL-ORDER-VIEW, OD-CAP-011, CP-CAP-010, FA-CAP-001, CP-RULE-014]
+
+  - id: RECON-CANCEL
+    concept: Order cancellation (bounded rule divergence)
+    stage2_ref: OVL-CANCEL
+    gt_class: partial-overlap
+    participants: [OrderDesk, CustomerPortal, FulfillmentAPI]
+    common_behavior: Set Orders.OrderStatus='Cancelled'.
+    app_specific_behavior:
+      OrderDesk: SQL eligibility (Pending/Confirmed/Allocated) + authorized override + audit.
+      CustomerPortal: C# rule, Pending/Confirmed only (stricter).
+      FulfillmentAPI: Rejects allocation of cancelled orders (THROW 50021) — complementary guard.
+    duplicated_logic: None — two genuinely different eligibility rules + a downstream guard.
+    business_rule_differences:
+      - "BOUNDED divergence on 'Allocated': staff may cancel, customer may not (DIVERGE-CANCEL)."
+      - "Enforcement layer differs (SQL proc vs C#)."
+    recommendation: keep_separate
+    unify: Shared cancellation domain scaffolding (status write + 'already cancelled' guard) only.
+    keep_context_specific: >
+      Two distinct eligibility policies MUST remain: StaffCancellationPolicy (incl. Allocated + override/audit)
+      and CustomerCancellationPolicy (Pending/Confirmed only). The FulfillmentAPI allocation guard stays.
+    stakeholder_approval_required: true
+    stakeholder_question: >
+      Confirm the staff-vs-customer cancellation divergence on 'Allocated' is intended business policy to
+      carry forward unchanged (Stage 1-3 treat it as intentional, not a bug).
+    evidence: [OVL-CANCEL, RULE-CANCEL, OD-RULE-014, OD-RULE-015, CP-RULE-015, FA-RULE-004]
+
+  - id: RECON-SHIPMENT
+    concept: Shipment tracking visibility
+    stage2_ref: OVL-SHIPMENT
+    gt_class: broadly-shared
+    participants: [FulfillmentAPI, CustomerPortal, OrderDesk]
+    common_behavior: One source of truth (dbo.Shipments/CarrierEvents) read by multiple surfaces.
+    app_specific_behavior:
+      FulfillmentAPI: Owns + writes shipments/events.
+      CustomerPortal: Friendly customer presentation (FriendlyStatus), ownership-checked.
+      OrderDesk: Raw read-only CS lookup.
+    duplicated_logic: None — one writer, two read presentations.
+    business_rule_differences: [Presentation differs (friendly vs raw); customer read is ownership-scoped.]
+    recommendation: unify_with_policy_split
+    unify: One Shipment domain (sole writer = fulfillment) + one tracking query.
+    keep_context_specific: Two presentation adapters (friendly customer view vs raw staff view); customer ownership filter preserved.
+    stakeholder_approval_required: false
+    evidence: [OVL-SHIPMENT, FA-CAP-008, FA-CAP-009, CP-CAP-014, OD-CAP-016]
+
+  - id: RECON-RETURNS
+    concept: Returns lifecycle (three-stage, complementary)
+    stage2_ref: OVL-RETURNS
+    gt_class: partial-overlap
+    participants: [CustomerPortal, OrderDesk, FulfillmentAPI]
+    common_behavior: One dbo.Returns row advances through a shared status lifecycle.
+    app_specific_behavior:
+      CustomerPortal: Create 'Requested' (30-day/Delivered window).
+      OrderDesk: Review -> 'Approved'/'Rejected'.
+      FulfillmentAPI: Receive 'Approved' -> 'Received' + restock (usp_ReceiveReturnAndAdjust).
+    duplicated_logic: None — each app owns a DISTINCT, non-duplicated stage.
+    business_rule_differences: [Each stage has its own rule; no conflict.]
+    recommendation: unify_implementation
+    unify: One Returns module owning the full lifecycle + a Return state machine (Requested->Approved/Rejected->Received). After consolidation the three stages become one module's workflow.
+    keep_context_specific: Stage-specific authorization (customer requests, staff approves, warehouse receives).
+    stakeholder_approval_required: false
+    evidence: [OVL-RETURNS, CP-CAP-012, OD-CAP-013, FA-CAP-010]
+
+  - id: RECON-MANDATORY
+    concept: Mandatory customer-info guard before order creation (DUPLICATE)
+    stage2_ref: DUP-MANDATORY-INFO
+    gt_class: "evidence-map DUP-1 (intentional triplicate)"
+    participants: [OrderDesk, CustomerPortal]
+    common_behavior: Order cannot be created unless customer has non-empty Email AND ShipAddressLine.
+    app_specific_behavior: Identical predicate; three implementations (OD C# helper, usp_ConvertQuoteToOrder THROW 50014, CP checkout guard).
+    duplicated_logic: Genuine duplication of the same predicate in 3 places.
+    business_rule_differences: None (identical).
+    recommendation: unify_with_policy_split
+    unify: One domain guard CustomerHasMandatoryOrderInfo(customer) used by both order-creation services (C# layer).
+    keep_context_specific: >
+      The SQL THROW 50014 inside usp_ConvertQuoteToOrder SHOULD be retained initially as a defense-in-depth
+      backstop (the proc is migrated as-is). Removing the SQL copy is a later optimization, not initial scope.
+    stakeholder_approval_required: false
+    evidence: [DUP-MANDATORY-INFO, OD-RULE-010, CP-RULE-010]
+
+  - id: RECON-AVAIL-EXPR
+    concept: Availability expression duplication (DUPLICATE)
+    stage2_ref: DUP-AVAIL
+    gt_class: "evidence-map DUP-2"
+    participants: [OrderDesk, CustomerPortal, FulfillmentAPI]
+    common_behavior: available = QuantityOnHand - QuantityAllocated in all three domain models.
+    duplicated_logic: The expression (OD InventoryItem.QuantityAvailable, CP StockLevel.Available, FA StockRecord.Available).
+    recommendation: keep_duplicate_consolidate_expression
+    unify: One shared computed property / domain function in the consolidated Inventory model.
+    keep_context_specific: The three read/write USES stay distinct (see RECON-INVENTORY).
+    stakeholder_approval_required: false
+    evidence: [DUP-AVAIL]
+
+  - id: RECON-COMMISSION
+    concept: Commission formula (dual-location)
+    stage2_ref: "evidence-map DUP-3"
+    participants: [OrderDesk]
+    common_behavior: Commission = value * rate, halved when discount >= 20%.
+    duplicated_logic: SQL (usp_ConvertQuoteToOrder, authoritative) + C# mirror (OrderDeskRules.CalculateCommission).
+    recommendation: keep_separate
+    unify: None initially — SQL is authoritative and the proc is migrated as-is; C# mirror stays for pre-check/tests.
+    keep_context_specific: Keep SQL authoritative; C# mirror is intentional (pre-check/testing).
+    stakeholder_approval_required: false
+    evidence: ["DUP-3 (evidence-map)", OD-RULE-009]
+
+  - id: RECON-IDEMPOTENCY
+    concept: Idempotency mechanisms (complementary)
+    stage2_ref: SHARED-IDEMPOTENCY
+    participants: [CustomerPortal, FulfillmentAPI]
+    common_behavior: Both guard against duplicate operations.
+    app_specific_behavior:
+      CustomerPortal: Checkout IdempotencyKey (UQ_Orders_Idempotency).
+      FulfillmentAPI: Carrier events (ShipmentId,EventCode,EventUtc) + return receipt (ReturnId).
+    duplicated_logic: None — different mechanisms, different operations.
+    recommendation: keep_separate
+    unify: None — preserve each mechanism on its own operation.
+    stakeholder_approval_required: false
+    evidence: [SHARED-IDEMPOTENCY, CP-RULE-009, FA-RULE-018, FA-RULE-021]
+
+decisions_requiring_stakeholders:
+  - RECON-CANCEL (confirm bounded cancellation divergence is intended policy)
+  - "SECURITY: API-key auth is flagged 'dev, not production' — confirm production auth model for migrated API routes (see api-compatibility-inventory OPEN-Q-SEC)."
+  - "Whether to keep the SQL-side mandatory-info/commission duplicates long-term (initial plan keeps them)."
+
+summary:
+  reconciliations: 12
+  unify_implementation: 3     # CATALOG, RETURNS, (inventory expr handled separately)
+  unify_with_policy_split: 5  # CUSTOMER, ORDER-CREATE, ORDER-VIEW, SHIPMENT, MANDATORY
+  keep_separate: 3            # CANCEL, COMMISSION, IDEMPOTENCY
+  keep_duplicate_consolidate_expression: 2  # INVENTORY, AVAIL-EXPR
+  principle: "Collapse duplicated mechanics; preserve intentional per-actor policy and bounded rule divergences."

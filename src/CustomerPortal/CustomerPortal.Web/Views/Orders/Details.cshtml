@@ -1,0 +1,81 @@
+@model OrderDetailViewModel
+@{
+    ViewData["Title"] = "Order " + Model.Order.OrderNumber;
+}
+<h2>Order @Model.Order.OrderNumber</h2>
+<p>
+    Status: <span class="badge bg-secondary">@Model.Order.OrderStatus</span>
+    &mdash; Placed @Model.Order.PlacedUtc.ToString("yyyy-MM-dd")
+    &mdash; Source: @Model.Order.OrderSource
+</p>
+
+<table class="table">
+    <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+    <tbody>
+    @foreach (var l in Model.Order.Lines)
+    {
+        <tr><td>@l.Product?.Name</td><td>@l.Quantity</td><td>@l.UnitPrice.ToString("C")</td></tr>
+    }
+    </tbody>
+    <tfoot>
+        <tr><td colspan="2" class="text-end">Subtotal</td><td>@Model.Order.SubTotal.ToString("C")</td></tr>
+        <tr><td colspan="2" class="text-end">Discount</td><td>@Model.Order.DiscountTotal.ToString("C")</td></tr>
+        <tr><td colspan="2" class="text-end"><strong>Total</strong></td><td><strong>@Model.Order.GrandTotal.ToString("C")</strong></td></tr>
+    </tfoot>
+</table>
+
+<div class="row">
+    <div class="col-md-6">
+        <h4>Tracking</h4>
+        @if (Model.Shipments.Count == 0)
+        {
+            <p class="text-muted">No shipment yet.</p>
+        }
+        else
+        {
+            foreach (var s in Model.Shipments)
+            {
+                <div class="card mb-2">
+                    <div class="card-body">
+                        <strong>@TrackingService.FriendlyStatus(s.ShipmentStatus)</strong>
+                        @if (!string.IsNullOrEmpty(s.TrackingNumber))
+                        {
+                            <div class="text-muted">@s.Carrier &mdash; @s.TrackingNumber</div>
+                        }
+                        <ul class="mt-2">
+                            @foreach (var e in s.Events.OrderBy(x => x.EventUtc))
+                            {
+                                <li>@e.EventUtc.ToString("yyyy-MM-dd HH:mm") &mdash; @e.Description</li>
+                            }
+                        </ul>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+    <div class="col-md-6">
+        <h4>Actions</h4>
+        @if (Model.CanCancel)
+        {
+            <form asp-action="Cancel" asp-route-id="@Model.Order.OrderId" method="post" class="mb-2">
+                @Html.AntiForgeryToken()
+                <input name="reason" class="form-control mb-1" placeholder="Reason (optional)" />
+                <button class="btn btn-outline-danger">Cancel order</button>
+            </form>
+        }
+        else
+        {
+            <p class="text-muted">This order can no longer be cancelled online.</p>
+        }
+
+        @if (Model.CanReturn)
+        {
+            <form asp-action="RequestReturn" asp-route-id="@Model.Order.OrderId" method="post">
+                @Html.AntiForgeryToken()
+                <input name="reason" class="form-control mb-1" placeholder="Return reason" />
+                <button class="btn btn-outline-warning">Request return</button>
+            </form>
+        }
+    </div>
+</div>
+<a asp-action="Index" class="btn btn-link mt-3">Back to orders</a>

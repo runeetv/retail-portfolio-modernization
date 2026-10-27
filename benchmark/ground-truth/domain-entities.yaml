@@ -1,0 +1,79 @@
+# Domain entity inventory (ground truth).
+# Maps each app's C# domain model to physical SQL tables, flagging where multiple
+# distinct C# models map to the same table (intentional benchmark trap).
+version: 1
+
+physical_tables:
+  shared: [Customers, Products, ProductCategories, Orders, OrderLines, Inventory, Returns, ReturnLines]
+  orderdesk_owned: [SalesQuotes, SalesQuoteLines, DiscountApprovals, SalesAgents, SalesAgentTasks, SalesCommissions, CancellationOverrides]
+  portal_owned: [CustomerAccounts, ShoppingCarts, ShoppingCartItems, Wishlists, WishlistItems, SupportTickets, SupportTicketMessages, CustomerPreferences, Coupons, CouponRedemptions]
+  fulfillment_owned: [Warehouses, WarehouseBins, InventoryAllocations, PickLists, PickListItems, Shipments, ShipmentPackages, CarrierEvents, ReturnReceipts, WarehouseAdjustments]
+
+app_models:
+  APP-ORDERDESK:
+    file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    maps:
+      Customer: Customers
+      Product: Products
+      ProductCategory: ProductCategories
+      InventoryItem: Inventory
+      Order: Orders
+      OrderLine: OrderLines
+      ReturnRequest: Returns
+      ShipmentStatusView: Shipments   # read-only projection (owned by FulfillmentAPI)
+      SalesQuote: SalesQuotes
+      SalesQuoteLine: SalesQuoteLines
+      DiscountApproval: DiscountApprovals
+      SalesAgent: SalesAgents
+      SalesAgentTask: SalesAgentTasks
+      SalesCommission: SalesCommissions
+      CancellationOverride: CancellationOverrides
+  APP-PORTAL:
+    file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    maps:
+      CustomerAccount: CustomerAccounts
+      ShopperProfile: Customers        # SECOND C# model over dbo.Customers
+      CustomerPreference: CustomerPreferences
+      CatalogProduct: Products
+      Category: ProductCategories
+      StockLevel: Inventory
+      ShoppingCart: ShoppingCarts
+      ShoppingCartItem: ShoppingCartItems
+      Wishlist: Wishlists
+      WishlistItem: WishlistItems
+      Coupon: Coupons
+      CouponRedemption: CouponRedemptions
+      SupportTicket: SupportTickets
+      SupportTicketMessage: SupportTicketMessages
+      CustomerOrder: Orders            # SECOND C# model over dbo.Orders
+      CustomerOrderLine: OrderLines
+      CustomerReturn: Returns
+      CustomerReturnLine: ReturnLines
+      TrackedShipment: Shipments
+      TrackingEvent: CarrierEvents
+  APP-FULFILL:
+    file: src/FulfillmentAPI/FulfillmentAPI.Domain/Entities.cs
+    maps:
+      FulfillmentOrder: Orders         # THIRD C# model over dbo.Orders
+      FulfillmentOrderLine: OrderLines
+      StockRecord: Inventory
+      ReturnForReceipt: Returns
+      Warehouse: Warehouses
+      WarehouseBin: WarehouseBins
+      InventoryAllocation: InventoryAllocations
+      PickList: PickLists
+      PickListItem: PickListItems
+      Shipment: Shipments
+      ShipmentPackage: ShipmentPackages
+      CarrierEvent: CarrierEvents
+      ReturnReceipt: ReturnReceipts
+      WarehouseAdjustment: WarehouseAdjustments
+
+# Intentional "different C# model -> same SQL table" cases:
+multi_model_tables:
+  - table: Customers
+    models: ["OrderDesk.Domain.Customer", "CustomerPortal.Domain.ShopperProfile"]
+    note: OrderDesk exposes full edit; Portal exposes a narrower self-service subset. Also CustomerAccount relates 1:1 via CustomerId.
+  - table: Orders
+    models: ["OrderDesk.Domain.Order", "CustomerPortal.Domain.CustomerOrder", "FulfillmentAPI.Domain.FulfillmentOrder"]
+    note: Three distinct C# order shapes over one physical table.

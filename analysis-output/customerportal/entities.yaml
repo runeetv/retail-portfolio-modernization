@@ -1,0 +1,361 @@
+# CustomerPortal — Domain Entity Reconstruction
+# role: aggregate_root | supporting_entity | value_object | technical_structure | read_model
+# Source namespace: CustomerPortal.Domain (Entities.cs). Mappings from PortalDbContext.
+version: 1
+application: CustomerPortal
+
+entities:
+  - id: CP-ENT-001
+    name: CustomerAccount
+    purpose: Portal login identity. The central account aggregate; links to the shared customer profile row.
+    source_class: CustomerPortal.Domain.CustomerAccount
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.CustomerAccounts
+    role: aggregate_root
+    key_attributes: [CustomerAccountId (PK), CustomerId (FK->Customers, unique), Username (unique), PasswordHash, IsLocked, LastLoginUtc, CreatedUtc]
+    relationships: [Profile (ShopperProfile) via CustomerId; owns carts/wishlists/tickets/preferences/redemptions by CustomerAccountId]
+    lifecycle: Read on login; LastLoginUtc updated on sign-in. No create/delete path observed in portal code.
+    crud: [read, update]
+    ownership: customer-owned identity
+    evidence: AuthService.SignInAsync; PortalDbContext(CustomerAccount); database/schema/03_customerportal.sql:CustomerAccounts
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-002
+    name: ShopperProfile
+    purpose: >
+      Portal's narrow self-service view of the shared customer record. A SECOND C#
+      model mapped to dbo.Customers (the comment in Entities.cs states another app
+      calls this "Customer").
+    source_class: CustomerPortal.Domain.ShopperProfile
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Customers
+    role: supporting_entity
+    key_attributes: [CustomerId (PK), FirstName, LastName, Email, Phone, Ship* address, CustomerStatus]
+    relationships: [1:1 with CustomerAccount via CustomerId]
+    lifecycle: Read for display; only contact + shipping fields updated via self-service. Name/email/status not editable in portal.
+    crud: [read, update(subset)]
+    ownership: customer-owned profile (shared physical table)
+    evidence: ProfileService; PortalDbContext(ShopperProfile -> "Customers")
+    confidence: high
+    verification: static_verified
+    note: CP-ENT-002 (ShopperProfile) and CP-ENT-003 refer to the same physical dbo.Customers row via CustomerId.
+
+  - id: CP-ENT-003
+    name: CustomerPreference
+    purpose: Key/value preference setting attached to an account.
+    source_class: CustomerPortal.Domain.CustomerPreference
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.CustomerPreferences
+    role: supporting_entity
+    key_attributes: [CustomerPreferenceId (PK), CustomerAccountId (FK), PrefKey, PrefValue]
+    relationships: [belongs to CustomerAccount]
+    lifecycle: Read only in portal code (GetPreferencesAsync). No write path observed.
+    crud: [read]
+    ownership: customer-owned
+    evidence: ProfileService.GetPreferencesAsync; database/schema/03_customerportal.sql:CustomerPreferences
+    confidence: medium
+    verification: static_verified
+
+  - id: CP-ENT-004
+    name: CatalogProduct
+    purpose: Product offered for sale in the catalog.
+    source_class: CustomerPortal.Domain.CatalogProduct
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Products
+    role: supporting_entity
+    key_attributes: [ProductId (PK), Sku, Name, CategoryId (FK), UnitPrice, IsDiscontinued]
+    relationships: [Category]
+    lifecycle: Read-only in portal.
+    crud: [read]
+    ownership: general business record (not customer-owned)
+    evidence: CatalogBrowseService; PortalDbContext(CatalogProduct -> "Products")
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-005
+    name: Category
+    purpose: Product category used for catalog filtering.
+    source_class: CustomerPortal.Domain.Category
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.ProductCategories
+    role: supporting_entity
+    key_attributes: [CategoryId (PK), Name, Slug, IsActive]
+    relationships: [referenced by CatalogProduct]
+    lifecycle: Read-only.
+    crud: [read]
+    ownership: general business record
+    evidence: CatalogBrowseService.GetCategoriesAsync; PortalDbContext(Category -> "ProductCategories")
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-006
+    name: StockLevel
+    purpose: Inventory snapshot per product; source of displayed availability and the checkout recheck.
+    source_class: CustomerPortal.Domain.StockLevel
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Inventory
+    role: read_model
+    key_attributes: [ProductId (PK), QuantityOnHand, QuantityAllocated, ReorderLevel]
+    derived_members: [Available = OnHand - Allocated]
+    relationships: [keyed by ProductId]
+    lifecycle: Read-only in portal (display + checkout recheck). Quantities are changed externally.
+    crud: [read]
+    ownership: general business record
+    evidence: CatalogBrowseService.DisplayAvailabilityAsync; CheckoutService (recheck); PortalDbContext(StockLevel -> "Inventory")
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-007
+    name: ShoppingCart
+    purpose: The shopper's active basket; holds items and an optional applied coupon code.
+    source_class: CustomerPortal.Domain.ShoppingCart
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.ShoppingCarts
+    role: aggregate_root
+    key_attributes: [ShoppingCartId (PK), CustomerAccountId (FK), CartStatus(Active/CheckedOut/Abandoned), AppliedCouponCode, CreatedUtc, CheckedOutUtc]
+    aggregates: [ShoppingCartItem]
+    states: [Active, CheckedOut, Abandoned]  # CK_ShoppingCarts_Status
+    relationships: [belongs to CustomerAccount; Items]
+    lifecycle: Created on demand (one Active per account); transitions Active -> CheckedOut at checkout.
+    crud: [create, read, update]
+    ownership: customer-owned
+    evidence: CartService; CheckoutService; database/schema/03_customerportal.sql:ShoppingCarts
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-008
+    name: ShoppingCartItem
+    purpose: A product line in a cart.
+    source_class: CustomerPortal.Domain.ShoppingCartItem
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.ShoppingCartItems
+    role: supporting_entity
+    key_attributes: [ShoppingCartItemId (PK), ShoppingCartId (FK), ProductId (FK), Quantity, AddedUtc]
+    constraints: [UQ(ShoppingCartId, ProductId); Quantity > 0]
+    relationships: [belongs to ShoppingCart; references CatalogProduct]
+    lifecycle: Created/updated/removed as part of the cart aggregate.
+    crud: [create, read, update, delete]
+    ownership: customer-owned
+    evidence: CartService; database/schema/03_customerportal.sql:ShoppingCartItems
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-009
+    name: CustomerOrder
+    purpose: Portal's view of an order placed by the shopper (carries an idempotency key).
+    source_class: CustomerPortal.Domain.CustomerOrder
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Orders
+    role: aggregate_root
+    key_attributes: [OrderId (PK), OrderNumber, CustomerId, OrderStatus, OrderSource, SubTotal, DiscountTotal, GrandTotal, IdempotencyKey, CancelReason, PlacedUtc]
+    aggregates: [CustomerOrderLine]
+    states_observed_in_portal: [Confirmed (on create), Cancelled (on customer cancel)]
+    relationships: [Lines]
+    lifecycle: >
+      Created by checkout (OrderStatus=Confirmed, OrderSource=CustomerPortal). Customer
+      may set Cancelled. Later lifecycle states (Allocated/Delivered/etc.) and orders with
+      other OrderSource values are produced/advanced externally.
+    crud: [create, read, update]
+    ownership: customer-owned at the portal boundary (shared physical table)
+    evidence: CheckoutService; OrderHistoryService; PortalDbContext(CustomerOrder -> "Orders")
+    confidence: high
+    verification: behavior_verified
+    external_dependencies: [EXT-ORDERS-OTHER-SOURCE]
+
+  - id: CP-ENT-010
+    name: CustomerOrderLine
+    purpose: A line on a customer order.
+    source_class: CustomerPortal.Domain.CustomerOrderLine
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.OrderLines
+    role: supporting_entity
+    key_attributes: [OrderLineId (PK), OrderId (FK), ProductId (FK), Quantity, UnitPrice, LineDiscount]
+    relationships: [belongs to CustomerOrder; references CatalogProduct]
+    lifecycle: Created with the order at checkout (LineDiscount set to 0 by portal checkout).
+    crud: [create, read]
+    ownership: customer-owned
+    evidence: CheckoutService; PortalDbContext(CustomerOrderLine -> "OrderLines")
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-011
+    name: Coupon
+    purpose: Promotional coupon definition with eligibility constraints.
+    source_class: CustomerPortal.Domain.Coupon
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Coupons
+    role: supporting_entity
+    key_attributes: [CouponId (PK), Code (unique), CouponType(Percent/FixedAmount), Value, MinCartTotal, RequiredStatus, MaxRedemptions, ExpiresUtc, IsActive]
+    relationships: [redeemed via CouponRedemption]
+    lifecycle: Read-only in portal (no coupon create/edit path). Consumed during apply + checkout.
+    crud: [read]
+    ownership: general business record
+    evidence: CartService.ApplyCouponAsync; CheckoutService; database/schema/03_customerportal.sql:Coupons
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-012
+    name: CouponRedemption
+    purpose: Record that a coupon was applied to an order and the amount discounted.
+    source_class: CustomerPortal.Domain.CouponRedemption
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.CouponRedemptions
+    role: supporting_entity
+    key_attributes: [CouponRedemptionId (PK), CouponId (FK), CustomerAccountId (FK), OrderId (FK), AmountDiscounted, RedeemedUtc]
+    relationships: [references Coupon, CustomerAccount, Order]
+    lifecycle: Created at checkout when a valid coupon yields a positive discount. Also read (count) for redemption-cap checks.
+    crud: [create, read]
+    ownership: customer-owned (account-linked)
+    evidence: CheckoutService (CouponRedemptions.Add); CartService (CountAsync); database/schema/03_customerportal.sql:CouponRedemptions
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-013
+    name: CustomerReturn
+    purpose: Portal's view of a return request the shopper raised.
+    source_class: CustomerPortal.Domain.CustomerReturn
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Returns
+    role: aggregate_root
+    key_attributes: [ReturnId (PK), ReturnNumber, OrderId (FK), CustomerId (FK), ReturnStatus, Reason, RequestedUtc]
+    aggregates: [CustomerReturnLine]
+    states_observed_in_portal: [Requested (on create)]
+    relationships: [references Order and Customer; Lines]
+    lifecycle: >
+      Created by the portal with status 'Requested'. The portal reads returns but does
+      not advance their status; review/receipt transitions are external.
+    crud: [create, read]
+    ownership: customer-owned (shared physical table)
+    evidence: ReturnService.RequestReturnAsync/GetOwnReturnsAsync; PortalDbContext(CustomerReturn -> "Returns")
+    confidence: high
+    verification: behavior_verified
+    external_dependencies: [EXT-RETURNS-TRANSITION]
+
+  - id: CP-ENT-014
+    name: CustomerReturnLine
+    purpose: A line on a return request.
+    source_class: CustomerPortal.Domain.CustomerReturnLine
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.ReturnLines
+    role: supporting_entity
+    key_attributes: [ReturnLineId (PK), ReturnId (FK), ProductId, Quantity]
+    relationships: [belongs to CustomerReturn]
+    lifecycle: Created with the return (copied from order lines).
+    crud: [create, read]
+    ownership: customer-owned
+    evidence: ReturnService.RequestReturnAsync; PortalDbContext(CustomerReturnLine -> "ReturnLines")
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-ENT-015
+    name: TrackedShipment
+    purpose: Read-only shipment record shown to the customer in a friendly format.
+    source_class: CustomerPortal.Domain.TrackedShipment
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Shipments
+    role: read_model
+    key_attributes: [ShipmentId (PK), OrderId, ShipmentStatus, Carrier, TrackingNumber, CreatedUtc, DispatchedUtc]
+    aggregates: [TrackingEvent]
+    relationships: [keyed to Order by OrderId]
+    lifecycle: Read-only; produced by an external application.
+    crud: [read]
+    ownership: external (not portal-owned)
+    evidence: TrackingService.GetOrderTrackingAsync; PortalDbContext(TrackedShipment -> "Shipments")
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SHIPMENTS]
+
+  - id: CP-ENT-016
+    name: TrackingEvent
+    purpose: Read-only carrier event under a shipment.
+    source_class: CustomerPortal.Domain.TrackingEvent
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.CarrierEvents
+    role: read_model
+    key_attributes: [CarrierEventId (PK), ShipmentId (FK), EventCode, Description, EventUtc]
+    relationships: [belongs to TrackedShipment]
+    lifecycle: Read-only; produced externally.
+    crud: [read]
+    ownership: external
+    evidence: TrackingService (Include Events); PortalDbContext(TrackingEvent -> "CarrierEvents")
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-CARRIEREVENTS]
+
+  - id: CP-ENT-017
+    name: SupportTicket
+    purpose: A customer support case with a message thread.
+    source_class: CustomerPortal.Domain.SupportTicket
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.SupportTickets
+    role: aggregate_root
+    key_attributes: [SupportTicketId (PK), CustomerAccountId (FK), Subject, TicketStatus(Open/Pending/Resolved/Closed), RelatedOrderId, CreatedUtc, UpdatedUtc]
+    aggregates: [SupportTicketMessage]
+    states: [Open, Pending, Resolved, Closed]  # CK_SupportTickets_Status
+    relationships: [belongs to CustomerAccount; optional RelatedOrderId; Messages]
+    lifecycle: Created Open by customer; status transitions validated; messages appended.
+    crud: [create, read, update]
+    ownership: customer-owned
+    evidence: SupportTicketService; database/schema/03_customerportal.sql:SupportTickets
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-018
+    name: SupportTicketMessage
+    purpose: A message within a support ticket thread.
+    source_class: CustomerPortal.Domain.SupportTicketMessage
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.SupportTicketMessages
+    role: supporting_entity
+    key_attributes: [SupportTicketMessageId (PK), SupportTicketId (FK), Author, Body, CreatedUtc]
+    relationships: [belongs to SupportTicket]
+    lifecycle: >
+      Portal creates messages with Author='Customer'. The Author column also allows an
+      agent name, implying agent replies may be authored externally.
+    crud: [create, read]
+    ownership: customer-owned thread (agent replies may originate externally)
+    evidence: SupportTicketService.CreateAsync/AddMessageAsync; database/schema/03_customerportal.sql:SupportTicketMessages
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SUPPORT-AGENT]
+
+  - id: CP-ENT-019
+    name: Wishlist
+    purpose: A per-account saved-products list.
+    source_class: CustomerPortal.Domain.Wishlist
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.Wishlists
+    role: aggregate_root
+    key_attributes: [WishlistId (PK), CustomerAccountId (FK), Name, CreatedUtc]
+    aggregates: [WishlistItem]
+    relationships: [belongs to CustomerAccount; Items]
+    lifecycle: One per account, created on demand.
+    crud: [create, read]
+    ownership: customer-owned
+    evidence: WishlistService; database/schema/03_customerportal.sql:Wishlists
+    confidence: high
+    verification: static_verified
+
+  - id: CP-ENT-020
+    name: WishlistItem
+    purpose: A product saved on a wishlist.
+    source_class: CustomerPortal.Domain.WishlistItem
+    source_file: src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    physical_table: dbo.WishlistItems
+    role: supporting_entity
+    key_attributes: [WishlistItemId (PK), WishlistId (FK), ProductId (FK), AddedUtc]
+    constraints: [UQ(WishlistId, ProductId)]
+    relationships: [belongs to Wishlist; references CatalogProduct]
+    lifecycle: Added (deduped) / removed.
+    crud: [create, read, delete]
+    ownership: customer-owned
+    evidence: WishlistService.AddAsync/RemoveAsync; database/schema/03_customerportal.sql:WishlistItems
+    confidence: high
+    verification: static_verified
+
+multi_model_tables_note: >
+  Entities.cs comments note CustomerAccount and ShopperProfile are the portal's own
+  models and that dbo.Customers is also represented by a differently-named model in
+  another application. CustomerOrder/CustomerReturn similarly map to shared Orders/Returns
+  tables. This analysis documents only the portal's representation.

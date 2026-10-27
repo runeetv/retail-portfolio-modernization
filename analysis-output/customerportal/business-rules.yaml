@@ -1,0 +1,301 @@
+# CustomerPortal — Business Rules (extracted from C#, DB constraints, tests)
+# kind: business_policy | authorization_control | validation | transactional_safeguard
+# location: csharp_domain | csharp_service | csharp_web | db_constraint
+version: 1
+application: CustomerPortal
+
+rules:
+  - id: CP-RULE-001
+    kind: authorization_control
+    description: Sign-in succeeds only for an existing account with a matching PBKDF2 password hash.
+    condition: account exists AND PasswordHasher.Verify(password, PasswordHash) is true
+    effect: On success, set LastLoginUtc and issue a cookie principal; otherwise "Invalid username or password."
+    location: csharp_service
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/AuthService.cs:SignInAsync
+      - src/Shared/LegacyRetail.Common/PasswordHasher.cs:Verify
+    capabilities: [CP-CAP-001]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-002
+    kind: business_policy
+    description: A locked account cannot sign in.
+    condition: CustomerAccount.IsLocked == true
+    effect: Sign-in rejected with "Account is locked."
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/AuthService.cs:SignInAsync
+    capabilities: [CP-CAP-001]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-003
+    kind: business_policy
+    description: Customers may self-edit only a subset of their profile (phone + shipping address); name, email, and status are not editable via the portal.
+    condition: Profile update request from an authenticated customer
+    effect: Only Phone and Ship* fields are written; other fields untouched.
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/ProfileService.cs:UpdateSelfServiceAsync
+    capabilities: [CP-CAP-003]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-004
+    kind: business_policy
+    description: Catalog listings show only non-discontinued products (max 200), optionally filtered by term/category.
+    condition: Product.IsDiscontinued == false
+    effect: Discontinued products excluded from search results.
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs:SearchAsync
+    capabilities: [CP-CAP-004]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-005
+    kind: business_policy
+    description: Displayed availability = QuantityOnHand - QuantityAllocated; used for display only (not authoritative).
+    condition: Availability requested for display
+    effect: Returns OnHand - Allocated (0 if no inventory row).
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs:DisplayAvailabilityAsync
+    capabilities: [CP-CAP-005]
+    confidence: high
+    verification: static_verified
+    note: Carts may hold items that are unavailable; availability is re-checked at checkout (CP-RULE-011).
+
+  - id: CP-RULE-006
+    kind: validation
+    description: Cart item quantity must be positive to add; adding an existing product increments quantity.
+    condition: quantity > 0; product exists
+    effect: New line added or existing line's quantity incremented; otherwise rejected.
+    location: csharp_service + db_constraint
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/CartService.cs:AddItemAsync
+      - database/schema/03_customerportal.sql:CK_ShoppingCartItems_Qty, UQ_ShoppingCartItems
+    capabilities: [CP-CAP-006]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-007
+    kind: business_policy
+    description: Updating a cart line to quantity <= 0 removes the line.
+    condition: UpdateQuantity with quantity <= 0
+    effect: Line removed from cart.
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/CartService.cs:UpdateQuantityAsync
+    capabilities: [CP-CAP-006]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-008
+    kind: business_policy
+    description: >
+      Coupon eligibility requires the coupon to be active, not expired, the cart total
+      to meet MinCartTotal, the customer's status to match RequiredStatus (if set), and
+      the redemption count to be below MaxRedemptions (if set).
+    condition: IsActive AND (ExpiresUtc is null OR future) AND cartTotal >= MinCartTotal AND (RequiredStatus null OR == customerStatus) AND (MaxRedemptions null OR redemptions < MaxRedemptions)
+    effect: Eligible -> coupon code stored on cart; ineligible -> specific rejection reason.
+    location: csharp_domain
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:EvaluateCoupon
+      - src/CustomerPortal/CustomerPortal.Application/CartService.cs:ApplyCouponAsync
+    capabilities: [CP-CAP-007]
+    confidence: high
+    verification: behavior_verified   # PortalRulesTests.EvaluateCoupon_* + workflow coupon test
+
+  - id: CP-RULE-009
+    kind: transactional_safeguard
+    description: Checkout is idempotent on an idempotency key; a repeat with the same key returns the existing order.
+    condition: An order already exists with the given IdempotencyKey (pre-check) OR a concurrent insert collides on the unique index
+    effect: Returns the existing order id; no duplicate order created.
+    location: csharp_service + db_constraint
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync (existing-key lookup; DbUpdateException -> winner lookup)
+      - database/schema/01_schema.sql:UQ_Orders_Idempotency (filtered unique index on Orders.IdempotencyKey)
+    capabilities: [CP-CAP-009]
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Checkout_creates_order_and_is_idempotent
+
+  - id: CP-RULE-010
+    kind: business_policy
+    description: Checkout requires a non-empty active cart and a profile with email + shipping address.
+    condition: active cart has >= 1 item AND profile.Email and profile.ShipAddressLine are non-empty
+    effect: Otherwise checkout fails ("Cart is empty." / "Your profile is missing an email or shipping address.").
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+    capabilities: [CP-CAP-009]
+    confidence: high
+    verification: static_verified
+    note: The mandatory email+shipping-address guard is a customer-info validation enforced here in C#.
+
+  - id: CP-RULE-011
+    kind: business_policy
+    description: At checkout, each cart line's requested quantity must be currently available (OnHand - Allocated), re-checked authoritatively.
+    condition: for every line, (QuantityOnHand - QuantityAllocated) >= line.Quantity
+    effect: If any line is short, checkout fails naming the product; no order created.
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync (recheck loop)
+    capabilities: [CP-CAP-009]
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Checkout_rechecks_inventory_and_blocks_when_unavailable
+
+  - id: CP-RULE-012
+    kind: business_policy
+    description: >
+      Order totals at checkout: SubTotal = sum(UnitPrice*Quantity); coupon discount
+      computed (re-validated) and subtracted; GrandTotal = round(SubTotal - discount, 2).
+      A positive coupon discount records a CouponRedemption.
+    condition: valid applied coupon -> CouponDiscount(coupon, subtotal); else 0
+    effect: Order DiscountTotal + GrandTotal set; CouponRedemption row created when discount > 0.
+    location: csharp_domain + csharp_service
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CouponDiscount
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+    capabilities: [CP-CAP-009]
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Coupon_applied_reduces_order_total_and_records_redemption
+
+  - id: CP-RULE-013
+    kind: business_policy
+    description: A portal checkout creates an order with OrderStatus='Confirmed' and OrderSource='CustomerPortal', and marks the cart 'CheckedOut'.
+    condition: successful checkout
+    effect: New Order (Confirmed/CustomerPortal) + lines; cart status -> CheckedOut.
+    location: csharp_service + db_constraint
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+      - database/schema/01_schema.sql:CK_Orders_Source (OrderDesk|CustomerPortal), CK_Orders_Status
+    capabilities: [CP-CAP-009]
+    confidence: high
+    verification: behavior_verified
+
+  - id: CP-RULE-014
+    kind: authorization_control
+    description: >
+      Record ownership — a customer may only read/act on their own orders, returns,
+      tickets, wishlist, and profile. Queries filter by the signed-in CustomerId
+      (orders/returns/tracking/profile) or CustomerAccountId (cart/wishlist/tickets).
+    condition: entity.CustomerId == User.CustomerId() (or .CustomerAccountId == User.AccountId())
+    effect: Non-owned records are not found / not acted on. Controllers also require [Authorize].
+    location: csharp_service + csharp_web
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs (GetOwnOrder/RequestCancellation filters)
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs; SupportTicketService.cs; WishlistService.cs; TrackingService.cs
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/*.cs ([Authorize] + User.CustomerId()/AccountId())
+    capabilities: [CP-CAP-010, CP-CAP-011, CP-CAP-012, CP-CAP-013, CP-CAP-014, CP-CAP-015, CP-CAP-016, CP-CAP-017, CP-CAP-018]
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Ownership_enforced_cannot_cancel_another_customers_order
+
+  - id: CP-RULE-015
+    kind: business_policy
+    description: A customer may self-cancel an order only while it is Pending or Confirmed.
+    condition: PortalRules.CustomerCanCancel(orderStatus) -> status in {Pending, Confirmed}
+    effect: Eligible -> order Cancelled (+ reason). Otherwise rejected with guidance to contact support.
+    location: csharp_domain
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CustomerCanCancel
+      - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:RequestCancellationAsync
+    capabilities: [CP-CAP-011]
+    confidence: high
+    verification: behavior_verified   # PortalRulesTests.CustomerCanCancel_is_stricter + workflow blocks_allocated
+
+  - id: CP-RULE-016
+    kind: validation
+    description: An already-cancelled order cannot be cancelled again.
+    condition: order.OrderStatus == 'Cancelled'
+    effect: Rejected with "Order is already cancelled."
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:RequestCancellationAsync
+    capabilities: [CP-CAP-011]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-017
+    kind: business_policy
+    description: A return may be requested only for a Delivered order within the 30-day return window.
+    condition: orderStatus == 'Delivered' AND (now - placedUtc).TotalDays <= 30
+    effect: Eligible -> return created; otherwise rejected.
+    location: csharp_domain
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CanRequestReturn (ReturnWindowDays=30)
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs:RequestReturnAsync
+    capabilities: [CP-CAP-012]
+    confidence: high
+    verification: behavior_verified   # PortalRulesTests.CanRequestReturn + workflow return test
+
+  - id: CP-RULE-018
+    kind: business_policy
+    description: Only one active return per order — a second return is blocked if a non-Rejected return already exists.
+    condition: exists Return for order with ReturnStatus != 'Rejected'
+    effect: New return request rejected ("A return already exists for this order.").
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/ReturnService.cs:RequestReturnAsync
+    capabilities: [CP-CAP-012]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-019
+    kind: validation
+    description: A support ticket requires a non-empty subject; it is created Open with an initial customer message.
+    condition: subject not blank
+    effect: Ticket created (Open) + first message authored by 'Customer'.
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:CreateAsync
+    capabilities: [CP-CAP-015]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-020
+    kind: business_policy
+    description: A message cannot be added to a Closed ticket.
+    condition: ticket.TicketStatus == 'Closed'
+    effect: AddMessage rejected ("Ticket is closed.").
+    location: csharp_service
+    implementation: src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:AddMessageAsync
+    capabilities: [CP-CAP-016]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-021
+    kind: business_policy
+    description: >
+      Support ticket status changes must follow the allowed transition graph
+      (Open->Pending, Open->Resolved, Pending->Open, Pending->Resolved, Resolved->Closed, Resolved->Open).
+    condition: PortalRules.IsValidTicketTransition(from, to) is true
+    effect: Valid -> status updated; invalid -> rejected with message.
+    location: csharp_domain + db_constraint
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:IsValidTicketTransition
+      - src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:ChangeStatusAsync
+      - database/schema/03_customerportal.sql:CK_SupportTickets_Status (value set)
+    capabilities: [CP-CAP-017]
+    confidence: high
+    verification: behavior_verified   # PortalRulesTests.IsValidTicketTransition
+
+  - id: CP-RULE-022
+    kind: business_policy
+    description: Adding a product already on the wishlist is a no-op (deduped); product must exist.
+    condition: product exists; not already on the wishlist
+    effect: Item added only when not present; duplicates ignored.
+    location: csharp_service + db_constraint
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Application/WishlistService.cs:AddAsync
+      - database/schema/03_customerportal.sql:UQ_WishlistItems
+    capabilities: [CP-CAP-018]
+    confidence: high
+    verification: static_verified
+
+  - id: CP-RULE-023
+    kind: authorization_control
+    description: >
+      Cross-site request forgery protection — all state-changing POST actions require a
+      valid antiforgery token; authentication is cookie-based and most controllers
+      require [Authorize] (Catalog browse and Account/Home are anonymous).
+    condition: valid __RequestVerificationToken on POST; authenticated principal for [Authorize] controllers
+    effect: Requests without a valid token/session are rejected / redirected to login.
+    location: csharp_web
+    implementation:
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/*.cs ([ValidateAntiForgeryToken], [Authorize])
+      - src/CustomerPortal/CustomerPortal.Web/Program.cs (cookie auth, AddControllersWithViews)
+    capabilities: [CP-CAP-006, CP-CAP-007, CP-CAP-009, CP-CAP-011, CP-CAP-012, CP-CAP-015, CP-CAP-016, CP-CAP-017, CP-CAP-018]
+    confidence: high
+    verification: static_verified

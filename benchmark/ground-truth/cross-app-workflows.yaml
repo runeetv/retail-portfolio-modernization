@@ -1,0 +1,50 @@
+# Cross-application workflows (ground truth).
+version: 1
+workflows:
+  - id: WF-A-STAFF-ORDER
+    name: Staff order (quote to shipment)
+    apps: [APP-ORDERDESK, APP-FULFILL]
+    steps:
+      - OrderDesk: create quote (QuoteService.CreateQuoteAsync)
+      - OrderDesk: add lines (QuoteService.AddLineAsync)
+      - OrderDesk: apply discount + approval (QuoteService.ApplyDiscountAsync/DecideDiscountAsync)
+      - OrderDesk: convert to order (usp_ConvertQuoteToOrder)
+      - FulfillmentAPI: allocate (usp_AllocateInventory)
+      - FulfillmentAPI: pick (PickingService)
+      - FulfillmentAPI: package + dispatch (ShipmentService)
+    test: tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowA_staff_quote_to_order_then_warehouse_fulfillment
+
+  - id: WF-B-CHECKOUT
+    name: Customer checkout to tracking
+    apps: [APP-PORTAL, APP-FULFILL]
+    steps:
+      - Portal: add to cart (CartService.AddItemAsync)
+      - Portal: apply coupon (CartService.ApplyCouponAsync)
+      - Portal: checkout (CheckoutService.CheckoutAsync)
+      - FulfillmentAPI: allocate/pick/package/dispatch
+      - Portal: view tracking (TrackingService.GetOrderTrackingAsync)
+    test: covered via CheckoutService idempotency + shipment visibility tests
+
+  - id: WF-C-RETURN
+    name: Customer return (three-app process)
+    apps: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    steps:
+      - Portal: request return -> 'Requested' (ReturnService.RequestReturnAsync)
+      - OrderDesk: approve -> 'Approved' (ReturnReviewService.ReviewAsync)
+      - FulfillmentAPI: receive -> 'Received' + restock (usp_ReceiveReturnAndAdjust)
+    test: tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowC_customer_return_orderdesk_approve_warehouse_receive
+
+  - id: WF-D-CANCEL
+    name: Cancellation blocks fulfillment
+    apps: [APP-PORTAL, APP-FULFILL]
+    steps:
+      - Portal: customer cancels eligible order (OrderHistoryService.RequestCancellationAsync)
+      - FulfillmentAPI: allocation rejected for cancelled order (usp_AllocateInventory 50021)
+    test: tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowD_customer_cancel_blocks_fulfillment_allocation
+
+  - id: WF-E-WAREHOUSE
+    name: Warehouse fulfillment
+    apps: [APP-FULFILL]
+    steps:
+      - allocate -> pick list -> pick items -> package -> dispatch -> carrier events -> tracking
+    test: tests/IntegrationTests/FulfillmentWorkflowTests.cs#Full_warehouse_flow_allocate_pick_package_dispatch

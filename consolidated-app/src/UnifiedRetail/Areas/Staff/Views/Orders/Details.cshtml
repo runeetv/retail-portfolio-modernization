@@ -1,0 +1,57 @@
+@model OrderDesk.Domain.Order
+@{
+    ViewData["Title"] = Model.OrderNumber;
+    var shipments = ViewBag.Shipments as List<OrderDesk.Domain.ShipmentStatusView> ?? new();
+    bool eligible = ViewBag.Eligible as bool? ?? false;
+    bool canOverride = User.IsInRole("SalesManager");
+}
+<h1>Order @Model.OrderNumber</h1>
+<div class="card">
+    <p><strong>Customer:</strong> @Model.Customer?.FullName · <strong>Status:</strong> @Model.OrderStatus · <strong>Source:</strong> @Model.OrderSource</p>
+    <p><strong>Total:</strong> @Model.GrandTotal.ToString("C")</p>
+    <p><strong>Cancellation eligible (staff rule):</strong> @eligible — @ViewBag.EligibilityReason</p>
+</div>
+
+<h3>Lines</h3>
+<table>
+    <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+    <tbody>
+    @foreach (var l in Model.Lines)
+    {
+        <tr><td>@(l.Product?.Name ?? ("#" + l.ProductId))</td><td>@l.Quantity</td><td>@l.UnitPrice.ToString("C")</td></tr>
+    }
+    </tbody>
+</table>
+
+<h3>Shipments (read-only)</h3>
+@if (shipments.Count == 0) { <p>None.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Shipment</th><th>Status</th><th>Carrier</th><th>Tracking</th></tr></thead>
+        <tbody>
+        @foreach (var s in shipments) { <tr><td>@s.ShipmentId</td><td>@s.ShipmentStatus</td><td>@s.Carrier</td><td>@s.TrackingNumber</td></tr> }
+        </tbody>
+    </table>
+}
+
+@if (Model.OrderStatus != "Cancelled")
+{
+    <div class="card">
+        <h3>Cancel</h3>
+        <form class="inline" method="post" asp-action="Cancel" asp-route-id="@Model.OrderId">
+            @Html.AntiForgeryToken()
+            <input name="reason" placeholder="reason" />
+            <button class="btn secondary" type="submit">Cancel (eligible only)</button>
+        </form>
+        @if (canOverride)
+        {
+            <form class="inline" method="post" asp-action="Override" asp-route-id="@Model.OrderId">
+                @Html.AntiForgeryToken()
+                <input name="justification" placeholder="override justification" required />
+                <input name="reason" placeholder="reason" />
+                <button class="btn" type="submit">Force cancel (override + audit)</button>
+            </form>
+        }
+    </div>
+}

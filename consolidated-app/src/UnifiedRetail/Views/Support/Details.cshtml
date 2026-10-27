@@ -1,0 +1,28 @@
+@model CustomerPortal.Domain.SupportTicket
+@{
+    ViewData["Title"] = Model.Subject;
+}
+<h1>@Model.Subject</h1>
+<div class="card">
+    <p><strong>Status:</strong> @Model.TicketStatus</p>
+    <form class="inline" method="post" asp-action="ChangeStatus" asp-route-id="@Model.SupportTicketId">
+        @Html.AntiForgeryToken()
+        <select name="newStatus">
+            <option>Open</option><option>Pending</option><option>Resolved</option><option>Closed</option>
+        </select>
+        <button class="btn secondary" type="submit">Change status</button>
+    </form>
+</div>
+<h3>Messages</h3>
+@foreach (var m in Model.Messages.OrderBy(m => m.CreatedUtc))
+{
+    <div class="card"><strong>@m.Author</strong> · @m.CreatedUtc.ToString("g")<br />@m.Body</div>
+}
+@if (Model.TicketStatus != "Closed")
+{
+    <form method="post" asp-action="AddMessage" asp-route-id="@Model.SupportTicketId">
+        @Html.AntiForgeryToken()
+        <p><textarea name="body" rows="3" style="width:100%" placeholder="Reply..."></textarea></p>
+        <button class="btn" type="submit">Reply</button>
+    </form>
+}

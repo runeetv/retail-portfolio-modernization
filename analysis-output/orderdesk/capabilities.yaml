@@ -1,0 +1,384 @@
+# OrderDesk — Business Capability Catalog (reverse-engineered from implementation)
+# Confidence: high | medium | low
+# Verification: static_verified | behavior_verified | inferred
+version: 1
+application: OrderDesk
+
+domains:
+  - id: OD-DOM-CUSTOMER
+    name: Customer Management (staff)
+    capabilities: [OD-CAP-001, OD-CAP-002]
+  - id: OD-DOM-CATALOG
+    name: Product Catalog & Inventory Availability
+    capabilities: [OD-CAP-003, OD-CAP-004]
+  - id: OD-DOM-QUOTING
+    name: Sales Quotation & Discount Approval
+    capabilities: [OD-CAP-005, OD-CAP-006, OD-CAP-007, OD-CAP-008, OD-CAP-009]
+  - id: OD-DOM-ORDER
+    name: Order Management (staff-assisted)
+    capabilities: [OD-CAP-010, OD-CAP-011, OD-CAP-012]
+  - id: OD-DOM-RETURNS
+    name: Return Review
+    capabilities: [OD-CAP-013]
+  - id: OD-DOM-AGENT
+    name: Sales Agent Operations (tasks & commissions)
+    capabilities: [OD-CAP-014, OD-CAP-015]
+  - id: OD-DOM-SHIPMENT
+    name: Shipment Status Lookup (read-only)
+    capabilities: [OD-CAP-016]
+
+capabilities:
+  - id: OD-CAP-001
+    domain: OD-DOM-CUSTOMER
+    name: Search customers
+    description: Staff search customers by first name, last name, or email (capped at 200 results).
+    actor: Sales / customer-service staff
+    trigger: Customers tab "Search" command
+    inputs: [search term (optional)]
+    outputs: [list of Customer]
+    entities: [OD-ENT-001]
+    rules: []
+    db_access:
+      read: [Customers]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CustomerService.cs:SearchAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/CustomersViewModel.cs:SearchAsync
+      - src/OrderDesk/OrderDesk.Desktop/Views/MainWindow.xaml (Customers tab)
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-002
+    domain: OD-DOM-CUSTOMER
+    name: Update customer contact information
+    description: >
+      Staff edit the full contact record (name, email, phone, and complete shipping
+      address). Email is required to save.
+    actor: Sales / customer-service staff
+    trigger: Customers tab "Save changes" command
+    inputs: [Customer (edited fields)]
+    outputs: [success / validation error]
+    entities: [OD-ENT-001]
+    rules: [OD-RULE-010]
+    db_access:
+      read: [Customers]
+      write: [Customers]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CustomerService.cs:UpdateContactAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/CustomersViewModel.cs:SaveAsync
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-003
+    domain: OD-DOM-CATALOG
+    name: Browse / search product catalog
+    description: >
+      Staff browse active (non-discontinued) products, optionally filtered by name or
+      SKU (capped at 300). Each row also surfaces available quantity in the UI.
+    actor: Sales / customer-service staff
+    trigger: Products tab "Search" command
+    inputs: [search term (optional)]
+    outputs: [list of Product + available quantity]
+    entities: [OD-ENT-002, OD-ENT-003, OD-ENT-004]
+    rules: [OD-RULE-011]
+    db_access:
+      read: [Products, ProductCategories, Inventory]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs:BrowseAsync
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs:AvailableQuantityAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/ProductsViewModel.cs:LoadAsync
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-004
+    domain: OD-DOM-CATALOG
+    name: Check inventory availability
+    description: >
+      Determine whether a requested quantity of a product is available, computed as
+      QuantityOnHand - QuantityAllocated. Used as a pre-order check.
+    actor: Sales / customer-service staff (indirect)
+    trigger: Internal (staff order creation) / Products tab display
+    inputs: [productId, quantity]
+    outputs: [boolean available / available quantity]
+    entities: [OD-ENT-004]
+    rules: [OD-RULE-007]
+    db_access:
+      read: [Inventory]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs:IsAvailableAsync
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs:AvailableQuantityAsync
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-005
+    domain: OD-DOM-QUOTING
+    name: Create sales quotation
+    description: >
+      Create a draft quote for a customer assigned to a sales agent, with a
+      system-generated quote number and an expiry date (default 14 days ahead).
+    actor: Sales agent
+    trigger: Quotations tab "Create quote" command
+    inputs: [customerId, salesAgentId, validityDays(optional=14)]
+    outputs: [SalesQuote (Draft)]
+    entities: [OD-ENT-006, OD-ENT-001, OD-ENT-005]
+    rules: [OD-RULE-001]
+    db_access:
+      read: [Customers, SalesAgents]
+      write: [SalesQuotes]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:CreateQuoteAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/QuotesViewModel.cs:CreateAsync
+    confidence: high
+    verification: behavior_verified   # exercised by OrderDeskWorkflowTests
+
+  - id: OD-CAP-006
+    domain: OD-DOM-QUOTING
+    name: Add quotation line items
+    description: >
+      Add product lines to a Draft/PendingApproval quote (merging quantity when the
+      product already exists on the quote); recomputes quote totals. Lines cannot be
+      modified once the quote leaves draft/pending.
+    actor: Sales agent
+    trigger: Quotations tab "Add line" command
+    inputs: [quoteId, productId, quantity]
+    outputs: [updated SalesQuote totals]
+    entities: [OD-ENT-006, OD-ENT-007, OD-ENT-002]
+    rules: [OD-RULE-002, OD-RULE-012]
+    db_access:
+      read: [SalesQuotes, SalesQuoteLines, Products]
+      write: [SalesQuotes, SalesQuoteLines]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:AddLineAsync
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:RecalculateTotals
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-CAP-007
+    domain: OD-DOM-QUOTING
+    name: Apply discount (with approval routing)
+    description: >
+      Apply a percentage discount to a quote. Discounts at/below the 15% threshold
+      auto-approve the quote; discounts above the threshold move the quote to
+      PendingApproval and create a DiscountApproval record.
+    actor: Sales agent
+    trigger: Quotations tab "Apply discount" command
+    inputs: [quoteId, discountPercent]
+    outputs: [quote status Approved or PendingApproval; optional DiscountApproval]
+    entities: [OD-ENT-006, OD-ENT-008]
+    rules: [OD-RULE-003, OD-RULE-013]
+    db_access:
+      read: [SalesQuotes, SalesQuoteLines, DiscountApprovals]
+      write: [SalesQuotes, DiscountApprovals]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ApplyDiscountAsync
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:RequiresDiscountApproval
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-CAP-008
+    domain: OD-DOM-QUOTING
+    name: Approve or reject pending discount
+    description: >
+      A manager/agent decides a pending DiscountApproval. Approval moves the quote to
+      Approved; rejection moves it to Rejected. Records the deciding agent, timestamp,
+      and notes. Already-decided approvals cannot be re-decided.
+    actor: Approving agent / manager
+    trigger: Discount Approvals tab "Approve" / "Reject" commands
+    inputs: [discountApprovalId, approve(bool), decidingAgentId, notes]
+    outputs: [DiscountApproval decided; quote Approved/Rejected]
+    entities: [OD-ENT-008, OD-ENT-006]
+    rules: [OD-RULE-004]
+    db_access:
+      read: [DiscountApprovals, SalesQuotes]
+      write: [DiscountApprovals, SalesQuotes]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:DecideDiscountAsync
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ListPendingApprovalsAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/ApprovalsViewModel.cs:DecideAsync
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-CAP-009
+    domain: OD-DOM-QUOTING
+    name: Convert approved quotation to order
+    description: >
+      Convert an Approved, non-expired, not-yet-converted quote into a Confirmed order
+      via the SQL stored procedure usp_ConvertQuoteToOrder. The procedure copies lines,
+      marks the quote Converted, and records a sales commission in one transaction.
+      A C# pre-check also blocks conversion when mandatory customer info is missing.
+    actor: Sales agent
+    trigger: Quotations tab "Convert to order" command
+    inputs: [quoteId]
+    outputs: [new OrderId or failure message]
+    entities: [OD-ENT-006, OD-ENT-011, OD-ENT-012, OD-ENT-009]
+    rules: [OD-RULE-005, OD-RULE-006, OD-RULE-008, OD-RULE-009, OD-RULE-010]
+    db_access:
+      read: [SalesQuotes, Customers]
+      execute: [usp_ConvertQuoteToOrder]
+      write_via_proc: [Orders, OrderLines, SalesQuotes, SalesCommissions]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ConvertToOrderAsync
+      - database/procedures/procedures.sql:usp_ConvertQuoteToOrder
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-CAP-010
+    domain: OD-DOM-ORDER
+    name: Create staff-assisted order
+    description: >
+      Create a Confirmed order directly (not via a quote). Validates mandatory customer
+      info, the acting sales agent, and stock availability per line, then writes the
+      order and lines inside a transaction. OrderSource is 'OrderDesk'.
+    actor: Sales agent
+    trigger: OrderService.CreateStaffOrderAsync (service-level; no dedicated create form observed in MainWindow.xaml)
+    inputs: [customerId, agentId, lines(productId, quantity)]
+    outputs: [new OrderId or failure]
+    entities: [OD-ENT-011, OD-ENT-012, OD-ENT-001, OD-ENT-004, OD-ENT-005]
+    rules: [OD-RULE-007, OD-RULE-010, OD-RULE-016]
+    db_access:
+      read: [Customers, SalesAgents, Inventory, Products]
+      write: [Orders, OrderLines]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CreateStaffOrderAsync
+    confidence: high
+    verification: static_verified
+    notes: >
+      No "create staff order" UI command found in MainWindow.xaml; capability is exposed
+      at the service layer and is reachable programmatically. UI entry point unresolved.
+
+  - id: OD-CAP-011
+    domain: OD-DOM-ORDER
+    name: View order details and status
+    description: >
+      List orders (optionally filtered by status, capped 200) and view a selected
+      order's lines and current status.
+    actor: Sales / customer-service staff
+    trigger: Orders tab selection / "Refresh"
+    inputs: [status filter (optional), orderId]
+    outputs: [Order list; Order detail with lines]
+    entities: [OD-ENT-011, OD-ENT-012, OD-ENT-001]
+    rules: []
+    db_access:
+      read: [Orders, OrderLines, Customers, Products]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:ListAsync
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:GetAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/OrdersViewModel.cs
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-012
+    domain: OD-DOM-ORDER
+    name: Cancel order (with authorized override)
+    description: >
+      Cancel an order. Eligibility is evaluated by the SQL procedure
+      usp_EvaluateCancellationEligibility. If ineligible, an agent flagged
+      CanOverrideCancellation may force-cancel with a justification, which writes an
+      audit record (CancellationOverride).
+    actor: "Sales / customer-service staff (override: authorized agent)"
+    trigger: Orders tab "Cancel order" command
+    inputs: [orderId, agentId, reason, forceOverride(bool), overrideJustification]
+    outputs: [order Cancelled or failure]
+    entities: [OD-ENT-011, OD-ENT-005, OD-ENT-013]
+    rules: [OD-RULE-014, OD-RULE-015, OD-RULE-017]
+    db_access:
+      read: [Orders, SalesAgents]
+      execute: [usp_EvaluateCancellationEligibility]
+      write: [Orders, CancellationOverrides]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:EvaluateEligibilityAsync
+      - database/procedures/procedures.sql:usp_EvaluateCancellationEligibility
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-CAP-013
+    domain: OD-DOM-RETURNS
+    name: Review customer return (approve / reject)
+    description: >
+      List returns (optionally by status) and approve or reject a return that is in
+      'Requested' state. Records the reviewing agent and timestamp. Only 'Requested'
+      returns may be reviewed. The return is CREATED outside OrderDesk; warehouse
+      receipt also happens outside OrderDesk.
+    actor: Sales / customer-service staff
+    trigger: Returns tab "Approve" / "Reject" commands
+    inputs: [returnId, approve(bool), agentId]
+    outputs: [return Approved/Rejected]
+    entities: [OD-ENT-014]
+    rules: [OD-RULE-018]
+    db_access:
+      read: [Returns]
+      write: [Returns]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs:ReviewAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/ReturnsViewModel.cs:ReviewAsync
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-RETURNS-CREATE, EXT-RETURNS-RECEIVE]
+
+  - id: OD-CAP-014
+    domain: OD-DOM-AGENT
+    name: Display and manage assigned sales-agent tasks
+    description: >
+      List active (non-Cancelled) tasks for a chosen agent and change a task's status
+      among Open / InProgress / Done / Cancelled.
+    actor: Sales agent
+    trigger: Agent Tasks tab selection + "Mark In Progress" / "Mark Done" commands
+    inputs: [salesAgentId, taskId, status]
+    outputs: [task list; updated task status]
+    entities: [OD-ENT-010, OD-ENT-005]
+    rules: [OD-RULE-019]
+    db_access:
+      read: [SalesAgentTasks, SalesAgents]
+      write: [SalesAgentTasks]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/AgentTaskService.cs:ListTasksAsync
+      - src/OrderDesk/OrderDesk.Application/AgentTaskService.cs:UpdateStatusAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/TasksViewModel.cs
+    confidence: high
+    verification: static_verified
+
+  - id: OD-CAP-015
+    domain: OD-DOM-AGENT
+    name: View sales-agent commissions
+    description: Display the most recent commissions (capped 100) earned by a chosen agent.
+    actor: Sales agent / manager
+    trigger: Agent Tasks tab (agent selection)
+    inputs: [salesAgentId]
+    outputs: [list of SalesCommission]
+    entities: [OD-ENT-009, OD-ENT-005]
+    rules: []
+    db_access:
+      read: [SalesCommissions]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/AgentTaskService.cs:ListCommissionsAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/TasksViewModel.cs:LoadForAgentAsync
+    confidence: high
+    verification: static_verified
+    notes: Commission rows are written by usp_ConvertQuoteToOrder (see OD-CAP-009); this capability is read-only display.
+
+  - id: OD-CAP-016
+    domain: OD-DOM-SHIPMENT
+    name: View shipment status for an order (read-only)
+    description: >
+      Display shipment status/carrier/tracking for a selected order for customer-service
+      lookups. OrderDesk only reads the Shipments table; it does not create or update it.
+    actor: Customer-service staff
+    trigger: Orders tab selection (detail load)
+    inputs: [orderId]
+    outputs: [list of ShipmentStatusView]
+    entities: [OD-ENT-015]
+    rules: []
+    db_access:
+      read: [Shipments]
+      write: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:GetShipmentsAsync
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/OrdersViewModel.cs:LoadDetailAsync
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SHIPMENTS]

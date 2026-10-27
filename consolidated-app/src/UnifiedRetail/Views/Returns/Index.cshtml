@@ -1,0 +1,18 @@
+@model List<CustomerPortal.Domain.CustomerReturn>
+@{
+    ViewData["Title"] = "My returns";
+}
+<h1>My returns</h1>
+@if (Model.Count == 0) { <p>No returns.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Return</th><th>Order</th><th>Status</th><th>Requested</th></tr></thead>
+        <tbody>
+        @foreach (var r in Model)
+        {
+            <tr><td>@r.ReturnNumber</td><td>@r.OrderId</td><td>@r.ReturnStatus</td><td>@r.RequestedUtc.ToString("yyyy-MM-dd")</td></tr>
+        }
+        </tbody>
+    </table>
+}

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>OrderDesk.Desktop</RootNamespace>
+    <AssemblyName>OrderDesk.Desktop</AssemblyName>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderDesk.Application\OrderDesk.Application.csproj" />
+    <ProjectReference Include="..\OrderDesk.Domain\OrderDesk.Domain.csproj" />
+    <ProjectReference Include="..\OrderDesk.Infrastructure\OrderDesk.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,16 @@
+@model CustomerPortal.Domain.ShoppingCart
+@{
+    ViewData["Title"] = "Checkout";
+}
+<h1>Checkout</h1>
+<div class="card">
+    <p><strong>Items:</strong> @Model.Items.Count</p>
+    <p><strong>Subtotal:</strong> @(((decimal)ViewBag.SubTotal).ToString("C"))</p>
+    @if (!string.IsNullOrEmpty(Model.AppliedCouponCode)) { <p><strong>Coupon:</strong> @Model.AppliedCouponCode (discount applied at placement)</p> }
+    <form method="post" asp-action="Place">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="idempotencyKey" value="@ViewBag.IdempotencyKey" />
+        <button class="btn" type="submit">Place order</button>
+    </form>
+    <p style="color:#64748b;font-size:13px">Checkout is idempotent, rechecks inventory, and requires a profile email + shipping address.</p>
+</div>

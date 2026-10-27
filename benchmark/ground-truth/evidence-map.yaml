@@ -1,0 +1,84 @@
+# Intentional architectural imperfections (ground truth) with source evidence.
+# These are the patterns a reverse-engineering agent should discover.
+version: 1
+
+duplicated_validation_rules:   # target: ~3
+  - id: DUP-1
+    rule: Mandatory customer info (email + shipping address) before order creation
+    locations:
+      - database/procedures/procedures.sql#usp_ConvertQuoteToOrder (THROW 50014)
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CustomerCanOrder
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (profile guard)
+  - id: DUP-2
+    rule: Inventory availability (OnHand - Allocated >= requested)
+    locations:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs#IsAvailableAsync
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (recheck loop)
+      - database/procedures/procedures.sql#usp_AllocateInventory
+  - id: DUP-3
+    rule: Commission formula (value * rate, halved when discount >= 20%)
+    locations:
+      - database/procedures/procedures.sql#usp_ConvertQuoteToOrder
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CalculateCommission
+
+semantically_overlapping_different_names:   # target: ~2
+  - id: SYN-1
+    concept: Order cancellation eligibility
+    names:
+      - OrderDesk: usp_EvaluateCancellationEligibility / OrderDeskRules.IsStaffCancellable
+      - CustomerPortal: PortalRules.CustomerCanCancel
+  - id: SYN-2
+    concept: Stock sufficiency check
+    names:
+      - OrderDesk: CatalogService.IsAvailableAsync ("availability")
+      - CustomerPortal: CatalogBrowseService.DisplayAvailabilityAsync ("display availability")
+      - FulfillmentAPI: AllocationService.AllocateAsync ("allocate")
+
+sql_enforced_rules:   # target: >=2
+  - usp_AllocateInventory (no over-allocation, block cancelled)
+  - usp_ReceiveReturnAndAdjust (approved-only, restock, no refund, idempotent)
+  - usp_ConvertQuoteToOrder (approved+not-expired+single-convert, commission)
+  - usp_EvaluateCancellationEligibility (staff cancel eligibility)
+
+different_models_same_table:   # target: ~2
+  - table: Customers
+    models: [OrderDesk.Domain.Customer, CustomerPortal.Domain.ShopperProfile]
+  - table: Orders
+    models: [OrderDesk.Domain.Order, CustomerPortal.Domain.CustomerOrder, FulfillmentAPI.Domain.FulfillmentOrder]
+
+multi_app_workflows:   # target: ~2
+  - WF-C-RETURN (Portal -> OrderDesk -> FulfillmentAPI)
+  - WF-D-CANCEL (Portal -> FulfillmentAPI)
+  - WF-A-STAFF-ORDER (OrderDesk -> FulfillmentAPI)   # bonus third
+
+terminology_inconsistencies:   # target: ~1
+  - id: TERM-1
+    description: The same order concept is named differently per app.
+    variants:
+      - OrderDesk.Domain.Order
+      - CustomerPortal.Domain.CustomerOrder
+      - FulfillmentAPI.Domain.FulfillmentOrder
+  - id: TERM-2
+    description: Customer identity naming differs.
+    variants:
+      - OrderDesk.Domain.Customer
+      - CustomerPortal.Domain.CustomerAccount (login) + ShopperProfile (profile)
+  - id: TERM-3
+    description: Return lifecycle status vocabulary differs between the Returns table ('Requested') and ReturnReceipts ('Received').
+
+cancellation_eligibility_divergence:   # target: 1 bounded difference
+  id: DIVERGE-CANCEL
+  description: >
+    OrderDesk staff may cancel 'Allocated' orders; CustomerPortal customers may NOT.
+    Bounded: both agree on Pending/Confirmed (cancellable) and later states (not).
+  evidence:
+    - database/procedures/procedures.sql#usp_EvaluateCancellationEligibility (includes 'Allocated')
+    - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CustomerCanCancel (excludes 'Allocated')
+  test: tests/CustomerPortal.Tests/PortalRulesTests.cs#Cancellation_divergence_from_OrderDesk_is_bounded_to_Allocated
+
+complex_cross_domain_query:   # target: 1
+  id: QUERY-1
+  name: usp_WarehouseActivitySummary
+  joins: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+  note: Spans fulfillment, shared, and OrderDesk (SalesAgents) domains.
+  evidence: database/procedures/procedures.sql#usp_WarehouseActivitySummary

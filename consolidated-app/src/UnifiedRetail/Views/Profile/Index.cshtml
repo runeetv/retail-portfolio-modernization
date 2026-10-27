@@ -1,0 +1,19 @@
+@model CustomerPortal.Domain.ShopperProfile
+@{
+    ViewData["Title"] = "Profile";
+}
+<h1>My profile</h1>
+<div class="card">
+    <p><strong>@Model.FirstName @Model.LastName</strong> (@Model.Email) · status: @Model.CustomerStatus</p>
+    <p style="color:#64748b;font-size:13px">Name, email, and status are managed by staff and are not editable here (self-service subset).</p>
+    <form method="post">
+        @Html.AntiForgeryToken()
+        <p><label>Phone<br /><input name="phone" value="@Model.Phone" /></label></p>
+        <p><label>Address<br /><input name="addr" value="@Model.ShipAddressLine" /></label></p>
+        <p><label>City<br /><input name="city" value="@Model.ShipCity" /></label></p>
+        <p><label>Region<br /><input name="region" value="@Model.ShipRegion" /></label></p>
+        <p><label>Postal code<br /><input name="postal" value="@Model.ShipPostalCode" /></label></p>
+        <p><label>Country<br /><input name="country" value="@Model.ShipCountry" /></label></p>
+        <button class="btn" type="submit">Save</button>
+    </form>
+</div>

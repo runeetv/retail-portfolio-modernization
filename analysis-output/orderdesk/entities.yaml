@@ -1,0 +1,253 @@
+# OrderDesk — Domain Entity Reconstruction
+# role: aggregate_root | supporting_entity | value_object | technical_structure | read_model
+# Source class namespace: OrderDesk.Domain (unless noted). Mappings from OrderDeskDbContext.
+version: 1
+application: OrderDesk
+
+entities:
+  - id: OD-ENT-001
+    name: Customer
+    purpose: Staff-facing view of a customer the business sells to.
+    source_class: OrderDesk.Domain.Customer
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Customers
+    role: aggregate_root
+    key_attributes: [CustomerId (PK), FirstName, LastName, Email, Phone, Ship* address, CustomerStatus]
+    derived_members: [FullName, HasMandatoryOrderInfo]
+    relationships:
+      - referenced by SalesQuote.CustomerId, Order.CustomerId, SalesAgentTask.RelatedCustomerId
+    lifecycle: OrderDesk reads and updates (CRU). No delete path observed. Rows may also be created/updated by external sources (shared table).
+    crud: [read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:Customer; OrderDeskDbContext.OnModelCreating(Customer)
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-002
+    name: Product
+    purpose: Catalog product that can be quoted/ordered.
+    source_class: OrderDesk.Domain.Product
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Products
+    role: supporting_entity
+    key_attributes: [ProductId (PK), Sku, Name, CategoryId (FK), UnitPrice, IsDiscontinued]
+    relationships: [Product.Category -> ProductCategory]
+    lifecycle: Read-only within OrderDesk.
+    crud: [read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:Product; OrderDeskDbContext.OnModelCreating(Product)
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-003
+    name: ProductCategory
+    purpose: Grouping for products.
+    source_class: OrderDesk.Domain.ProductCategory
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.ProductCategories
+    role: supporting_entity
+    key_attributes: [CategoryId (PK), Name, Slug, IsActive]
+    relationships: [referenced by Product.CategoryId]
+    lifecycle: Read-only within OrderDesk.
+    crud: [read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:ProductCategory
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-004
+    name: InventoryItem
+    purpose: Stock snapshot per product used for availability checks.
+    source_class: OrderDesk.Domain.InventoryItem
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Inventory
+    role: read_model
+    key_attributes: [ProductId (PK), QuantityOnHand, QuantityAllocated, ReorderLevel]
+    derived_members: [QuantityAvailable = OnHand - Allocated]
+    relationships: [keyed by ProductId -> Product]
+    lifecycle: Read-only within OrderDesk (availability checks only).
+    crud: [read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:InventoryItem; CatalogService
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-005
+    name: SalesAgent
+    purpose: Internal sales representative; carries commission rate and cancellation-override authority.
+    source_class: OrderDesk.Domain.SalesAgent
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.SalesAgents
+    role: aggregate_root
+    key_attributes: [SalesAgentId (PK), AgentCode (unique), FullName, Email, CommissionRate, CanOverrideCancellation, IsActive]
+    relationships: [referenced by SalesQuote, SalesCommission, SalesAgentTask, CancellationOverride, DiscountApproval.ApprovedByAgentId]
+    lifecycle: Read-only within OrderDesk (no create/update path observed).
+    crud: [read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:SalesAgent; database/schema/02_orderdesk.sql:SalesAgents
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-006
+    name: SalesQuote
+    purpose: A priced sales quotation that can be converted into an order.
+    source_class: OrderDesk.Domain.SalesQuote
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.SalesQuotes
+    role: aggregate_root
+    key_attributes: [SalesQuoteId (PK), QuoteNumber (unique), CustomerId, SalesAgentId, QuoteStatus, DiscountPercent, SubTotal, GrandTotal, CreatedUtc, ExpiresUtc, ConvertedOrderId]
+    aggregates: [SalesQuoteLine]
+    states: [Draft, PendingApproval, Approved, Rejected, Expired, Converted]  # QuoteStatus enum / CK_SalesQuotes_Status
+    derived_members: [IsExpired(utcNow)]
+    relationships: [Customer, SalesAgent, Lines(SalesQuoteLine), ConvertedOrderId -> Order]
+    lifecycle: Created, updated, and transitioned by OrderDesk; marked Converted by usp_ConvertQuoteToOrder.
+    crud: [create, read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:SalesQuote; QuoteService; database/schema/02_orderdesk.sql:SalesQuotes
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-007
+    name: SalesQuoteLine
+    purpose: A product line on a quote.
+    source_class: OrderDesk.Domain.SalesQuoteLine
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.SalesQuoteLines
+    role: supporting_entity
+    key_attributes: [SalesQuoteLineId (PK), SalesQuoteId (FK), ProductId (FK), Quantity, UnitPrice]
+    derived_members: [LineTotal = UnitPrice * Quantity]
+    relationships: [belongs to SalesQuote; references Product]
+    lifecycle: Created/updated as part of the SalesQuote aggregate.
+    crud: [create, read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:SalesQuoteLine; QuoteService.AddLineAsync
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-008
+    name: DiscountApproval
+    purpose: Approval request/decision for a discount that exceeds the threshold.
+    source_class: OrderDesk.Domain.DiscountApproval
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.DiscountApprovals
+    role: supporting_entity
+    key_attributes: [DiscountApprovalId (PK), SalesQuoteId (FK), RequestedPercent, ApprovalStatus(Pending/Approved/Rejected), ApprovedByAgentId, DecisionUtc, Notes]
+    relationships: [belongs to SalesQuote; decided by SalesAgent]
+    lifecycle: Created when a high discount is applied; decided (approved/rejected) by staff.
+    crud: [create, read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:DiscountApproval; QuoteService.ApplyDiscountAsync/DecideDiscountAsync
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-009
+    name: SalesCommission
+    purpose: Commission earned by an agent on a converted order.
+    source_class: OrderDesk.Domain.SalesCommission
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.SalesCommissions
+    role: supporting_entity
+    key_attributes: [SalesCommissionId (PK), SalesAgentId (FK), OrderId (FK, unique), OrderValue, DiscountPercent, CommissionAmount, CreatedUtc]
+    relationships: [one per Order (UQ_SalesCommissions_Order); references SalesAgent]
+    lifecycle: Written by usp_ConvertQuoteToOrder; OrderDesk otherwise reads for display.
+    crud: [read, create-via-proc]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:SalesCommission; database/procedures/procedures.sql:usp_ConvertQuoteToOrder; AgentTaskService.ListCommissionsAsync
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-010
+    name: SalesAgentTask
+    purpose: A to-do item assigned to a sales agent, optionally related to a customer or quote.
+    source_class: OrderDesk.Domain.SalesAgentTask
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.SalesAgentTasks
+    role: aggregate_root
+    key_attributes: [SalesAgentTaskId (PK), SalesAgentId (FK), Title, Details, RelatedCustomerId, RelatedQuoteId, TaskStatus(Open/InProgress/Done/Cancelled), DueUtc, CreatedUtc]
+    relationships: [belongs to SalesAgent; optional links to Customer and SalesQuote]
+    lifecycle: OrderDesk reads tasks and updates status. Creation path not observed in OrderDesk code.
+    crud: [read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:SalesAgentTask; AgentTaskService
+    confidence: high
+    verification: static_verified
+
+  - id: OD-ENT-011
+    name: Order
+    purpose: Staff-facing view of a sales order.
+    source_class: OrderDesk.Domain.Order
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Orders
+    role: aggregate_root
+    key_attributes: [OrderId (PK), OrderNumber (unique), CustomerId, OrderStatus, OrderSource, SubTotal, DiscountTotal, GrandTotal, PlacedByAgentId, SourceQuoteId, CancelReason, PlacedUtc]
+    aggregates: [OrderLine]
+    states: [Pending, Confirmed, Allocated, Picking, Packed, Shipped, Delivered, Cancelled]  # CK_Orders_Status (not all transitions driven by OrderDesk)
+    relationships: [Customer, Lines(OrderLine), SourceQuoteId -> SalesQuote]
+    lifecycle: >
+      Created by OrderDesk (staff order, OrderSource='OrderDesk') or by usp_ConvertQuoteToOrder.
+      OrderDesk updates OrderStatus to 'Cancelled'. Shared table — rows with OrderSource='CustomerPortal'
+      and later lifecycle statuses are produced/advanced by external sources.
+    crud: [create, read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:Order; OrderService; usp_ConvertQuoteToOrder; database/schema/01_schema.sql:Orders
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-012
+    name: OrderLine
+    purpose: A product line on an order.
+    source_class: OrderDesk.Domain.OrderLine
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.OrderLines
+    role: supporting_entity
+    key_attributes: [OrderLineId (PK), OrderId (FK), ProductId (FK), Quantity, UnitPrice, LineDiscount]
+    relationships: [belongs to Order; references Product]
+    lifecycle: Created with the order (staff order or quote conversion).
+    crud: [create, read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:OrderLine; OrderService.CreateStaffOrderAsync; usp_ConvertQuoteToOrder
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-013
+    name: CancellationOverride
+    purpose: Audit record proving an authorized agent force-cancelled an otherwise-ineligible order.
+    source_class: OrderDesk.Domain.CancellationOverride
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.CancellationOverrides
+    role: supporting_entity
+    key_attributes: [CancellationOverrideId (PK), OrderId (FK), SalesAgentId (FK), PreviousStatus, Justification, CreatedUtc]
+    relationships: [references Order and SalesAgent]
+    lifecycle: Created only during an authorized override cancellation.
+    crud: [create]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:CancellationOverride; OrderService.CancelOrderAsync; database/schema/02_orderdesk.sql:CancellationOverrides
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-ENT-014
+    name: ReturnRequest
+    purpose: Staff-facing view of a product return under review.
+    source_class: OrderDesk.Domain.ReturnRequest
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Returns
+    role: aggregate_root
+    key_attributes: [ReturnId (PK), ReturnNumber (unique), OrderId (FK), CustomerId (FK), ReturnStatus(Requested/Approved/Rejected/Received/Closed), Reason, RequestedUtc, ReviewedByAgentId, ReviewedUtc]
+    relationships: [references Order and Customer]
+    lifecycle: >
+      OrderDesk reads and transitions 'Requested' -> 'Approved'/'Rejected'. Creation
+      ('Requested') and later states ('Received'/'Closed') are driven by external sources.
+    crud: [read, update]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:ReturnRequest; ReturnReviewService; database/schema/01_schema.sql:Returns
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-RETURNS-CREATE, EXT-RETURNS-RECEIVE]
+
+  - id: OD-ENT-015
+    name: ShipmentStatusView
+    purpose: Read-only projection of shipment status/tracking for customer-service lookups.
+    source_class: OrderDesk.Domain.ShipmentStatusView
+    source_file: src/OrderDesk/OrderDesk.Domain/Entities.cs
+    physical_table: dbo.Shipments
+    role: read_model
+    key_attributes: [ShipmentId (PK), OrderId, ShipmentStatus, Carrier, TrackingNumber, DispatchedUtc]
+    relationships: [keyed to Order via OrderId]
+    lifecycle: Read-only; the Shipments table is owned/written by an external application.
+    crud: [read]
+    evidence: src/OrderDesk/OrderDesk.Domain/Entities.cs:ShipmentStatusView; OrderService.GetShipmentsAsync; OrderDeskDbContext.OnModelCreating(ShipmentStatusView)
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SHIPMENTS]
+
+notes:
+  - The domain comments state OrderDesk defines its OWN entity shapes even for shared
+    tables (Customers, Products, Orders), distinct from other applications' models.
+  - QuoteStatus is a C# enum (Draft, PendingApproval, Approved, Rejected, Expired, Converted);
+    the DB column is NVARCHAR with CK_SalesQuotes_Status enforcing the same set.

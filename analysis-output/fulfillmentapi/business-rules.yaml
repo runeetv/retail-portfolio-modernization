@@ -1,0 +1,346 @@
+# FulfillmentAPI — Business Rules (extracted from C#, SQL procedures, DB constraints, tests)
+# enforcement_layer: csharp_domain | csharp_service | sql_procedure | db_constraint | api_validation | middleware
+version: 1
+application: FulfillmentAPI
+
+rules:
+  - id: FA-RULE-001
+    name: Availability definition
+    description: Available quantity equals QuantityOnHand minus QuantityAllocated.
+    preconditions: [inventory row exists]
+    decision: available = QuantityOnHand - QuantityAllocated
+    action: Returned for display; basis for allocation sufficiency (FA-RULE-003).
+    entities: [FA-ENT-005]
+    capabilities: [FA-CAP-002, FA-CAP-003]
+    enforcement_layer: csharp_domain
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Domain/Entities.cs:StockRecord.Available; FulfillmentQueryService.GetStockAsync
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-002
+    name: Allocation requires existing warehouse and order
+    description: Allocation is rejected if the target warehouse or the order does not exist.
+    preconditions: [allocate requested]
+    decision: warehouse exists AND order exists
+    action: Otherwise 404 NotFound before invoking the stored procedure.
+    entities: [FA-ENT-001, FA-ENT-003]
+    capabilities: [FA-CAP-003]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs:AllocateAsync
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-003
+    name: Cannot allocate beyond available stock
+    description: For each product, the quantity needed must not exceed available (OnHand - Allocated).
+    preconditions: [allocation in progress]
+    decision: for each product, Avail >= Need (per-product, under UPDLOCK/HOLDLOCK)
+    action: THROW 50022; service maps to 409 Conflict; whole allocation rolls back (XACT_ABORT).
+    entities: [FA-ENT-005, FA-ENT-006]
+    capabilities: [FA-CAP-003]
+    enforcement_layer: sql_procedure + db_constraint
+    evidence:
+      - database/procedures/procedures.sql:usp_AllocateInventory (THROW 50022)
+      - database/schema/01_schema.sql:CK_Inventory_Alloc (QuantityAllocated <= QuantityOnHand)
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Allocation_reserves_stock_and_blocks_over_allocation
+
+  - id: FA-RULE-004
+    name: Cancelled orders block allocation
+    description: Inventory cannot be allocated for an order whose status is Cancelled.
+    preconditions: [allocate requested]
+    decision: OrderStatus != 'Cancelled'
+    action: THROW 50021; service maps to 409 Conflict.
+    entities: [FA-ENT-003]
+    capabilities: [FA-CAP-003]
+    enforcement_layer: sql_procedure
+    evidence: database/procedures/procedures.sql:usp_AllocateInventory (THROW 50021)
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Allocation_blocked_for_cancelled_order
+
+  - id: FA-RULE-005
+    name: Picking requires prior allocation
+    description: A pick list can only be created for an order that already has 'Allocated' allocations.
+    preconditions: [create pick list]
+    decision: exists InventoryAllocation for order with AllocationStatus='Allocated'
+    action: Otherwise 409 Conflict ("Order has no inventory allocation yet. Allocate first.").
+    entities: [FA-ENT-006, FA-ENT-007]
+    capabilities: [FA-CAP-004]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:CreatePickListAsync
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Picking_requires_prior_allocation
+
+  - id: FA-RULE-006
+    name: Cancelled orders block pick-list creation
+    description: A pick list cannot be created for a cancelled order.
+    preconditions: [create pick list]
+    decision: NOT FulfillmentRules.IsBlockedForFulfillment(orderStatus) (i.e. status != 'Cancelled')
+    action: Otherwise 409 Conflict.
+    entities: [FA-ENT-003, FA-ENT-007]
+    capabilities: [FA-CAP-004]
+    enforcement_layer: csharp_domain + csharp_service
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:IsBlockedForFulfillment
+      - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:CreatePickListAsync
+    capabilities_note: FulfillmentRules.CanCreatePickList(status) exists (Allocated/Picking) but is not invoked by the service; the service gates on cancelled-status + presence of allocations instead.
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-007
+    name: One pick list per order
+    description: An order may have at most one pick list.
+    preconditions: [create pick list]
+    decision: no existing PickList for the order
+    action: Otherwise 409 Conflict ("A pick list already exists for this order.").
+    entities: [FA-ENT-007]
+    capabilities: [FA-CAP-004]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:CreatePickListAsync
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-008
+    name: Picked quantity bounds
+    description: Picked quantity for an item must be between 0 and QuantityToPick inclusive.
+    preconditions: [mark item picked]
+    decision: 0 <= quantityPicked <= QuantityToPick
+    action: Out of range -> 400 Validation. IsPicked set when picked >= toPick.
+    entities: [FA-ENT-008]
+    capabilities: [FA-CAP-005]
+    enforcement_layer: csharp_service + db_constraint
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:MarkItemPickedAsync
+      - database/schema/04_fulfillment.sql:CK_PickListItems_Qty
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-009
+    name: Items must be picked before packaging
+    description: A shipment package can only be created once every pick-list item for the order is picked.
+    preconditions: [create shipment]
+    decision: picks exist AND all items IsPicked (FulfillmentRules.CanPackageShipment)
+    action: Otherwise 409 Conflict ("All items must be picked before packaging.").
+    entities: [FA-ENT-007, FA-ENT-008, FA-ENT-009]
+    capabilities: [FA-CAP-006]
+    enforcement_layer: csharp_domain + csharp_service
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:CanPackageShipment
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:CreateShipmentWithPackageAsync
+    confidence: high
+    verification: behavior_verified   # within Full_warehouse_flow (packages only after picking)
+
+  - id: FA-RULE-010
+    name: Pending-fulfillment order filter
+    description: The pending-orders list returns only orders in Confirmed or Allocated status (max 200).
+    preconditions: [list pending]
+    decision: OrderStatus IN ('Confirmed','Allocated')
+    action: Returns the filtered set ordered by PlacedUtc.
+    entities: [FA-ENT-003]
+    capabilities: [FA-CAP-001]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetPendingOrdersAsync
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-011
+    name: Unique package code
+    description: A shipment package code must be unique.
+    preconditions: [create shipment]
+    decision: no existing ShipmentPackage with the same PackageCode
+    action: Otherwise 409 Conflict; also enforced by UQ_ShipmentPackages_Code.
+    entities: [FA-ENT-010]
+    capabilities: [FA-CAP-006]
+    enforcement_layer: csharp_service + db_constraint
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:CreateShipmentWithPackageAsync
+      - database/schema/04_fulfillment.sql:UQ_ShipmentPackages_Code
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-012
+    name: Allocation advances order to Allocated
+    description: After allocation, an order in Pending/Confirmed is set to Allocated.
+    preconditions: [allocation committed]
+    decision: OrderStatus IN ('Pending','Confirmed')
+    action: UPDATE Orders.OrderStatus = 'Allocated'.
+    entities: [FA-ENT-003, FA-ENT-006]
+    capabilities: [FA-CAP-003]
+    enforcement_layer: sql_procedure
+    evidence: database/procedures/procedures.sql:usp_AllocateInventory
+    confidence: high
+    verification: behavior_verified
+
+  - id: FA-RULE-013
+    name: Picking advances order to Picking
+    description: When picking begins/progresses on an Allocated order, the order moves to Picking.
+    preconditions: [mark item picked]
+    decision: order.OrderStatus == 'Allocated' AND pick status InProgress/Completed
+    action: Orders.OrderStatus = 'Picking'.
+    entities: [FA-ENT-003, FA-ENT-007]
+    capabilities: [FA-CAP-005]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:MarkItemPickedAsync
+    confidence: high
+    verification: static_verified
+    notes: >
+      The code also contains an expression intended to roll to 'Picking' on completion; the
+      effective observed outcome is Allocated -> Picking during picking. (See analysis-gaps GAP-002.)
+
+  - id: FA-RULE-014
+    name: Packaging sets shipment Packed and order Packed
+    description: Creating a shipment package sets the shipment to 'Packed' and the order to 'Packed'.
+    preconditions: [shipment created]
+    decision: always on successful create
+    action: Shipment.ShipmentStatus='Packed'; Orders.OrderStatus='Packed'.
+    entities: [FA-ENT-009, FA-ENT-003]
+    capabilities: [FA-CAP-006]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:CreateShipmentWithPackageAsync
+    confidence: high
+    verification: behavior_verified
+
+  - id: FA-RULE-015
+    name: Shipment status transition validity
+    description: Shipment status changes must follow the allowed transition graph.
+    preconditions: [update shipment status]
+    decision: FulfillmentRules.IsValidShipmentTransition(from, to)
+    action: Invalid -> 409 Conflict. Valid set - Created->Packed, Packed->Dispatched, Dispatched->InTransit, InTransit->Delivered, Dispatched->Delivered, *->Exception.
+    entities: [FA-ENT-009]
+    capabilities: [FA-CAP-007]
+    enforcement_layer: csharp_domain + csharp_service
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:IsValidShipmentTransition
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:UpdateStatusAsync
+    confidence: high
+    verification: behavior_verified   # FulfillmentRulesTests.IsValidShipmentTransition
+
+  - id: FA-RULE-016
+    name: Dispatch requires package + carrier reference
+    description: A shipment cannot be dispatched without at least one package AND a carrier and tracking number.
+    preconditions: [status update to 'Dispatched']
+    decision: FulfillmentRules.CanDispatch(hasPackage, carrier, trackingNumber)
+    action: Otherwise 409 Conflict. On success, Carrier/TrackingNumber set and DispatchedUtc stamped.
+    entities: [FA-ENT-009, FA-ENT-010]
+    capabilities: [FA-CAP-007]
+    enforcement_layer: csharp_domain + csharp_service
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:CanDispatch
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:UpdateStatusAsync
+    confidence: high
+    verification: behavior_verified   # Full_warehouse_flow (dispatch w/o carrier -> 409)
+
+  - id: FA-RULE-017
+    name: Shipment milestones roll the order forward
+    description: Dispatch sets the order to Shipped; Delivered sets the order to Delivered.
+    preconditions: [shipment status updated]
+    decision: newStatus == 'Dispatched' -> order 'Shipped'; newStatus == 'Delivered' -> order 'Delivered'
+    action: UPDATE Orders.OrderStatus.
+    entities: [FA-ENT-009, FA-ENT-003]
+    capabilities: [FA-CAP-007]
+    enforcement_layer: csharp_service
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:UpdateStatusAsync
+    confidence: high
+    verification: behavior_verified   # Full_warehouse_flow asserts order 'Shipped' after dispatch
+
+  - id: FA-RULE-018
+    name: Carrier event idempotency
+    description: Recording a carrier event is idempotent on (ShipmentId, EventCode, EventUtc).
+    preconditions: [record carrier event]
+    decision: no existing event with same (ShipmentId, EventCode, EventUtc)
+    action: If present, return the existing event; else insert. Backed by UQ_CarrierEvents.
+    entities: [FA-ENT-011]
+    capabilities: [FA-CAP-008]
+    enforcement_layer: csharp_service + db_constraint
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:RecordCarrierEventAsync
+      - database/schema/04_fulfillment.sql:UQ_CarrierEvents
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Carrier_events_are_idempotent
+
+  - id: FA-RULE-019
+    name: Only approved returns may be received
+    description: A return can be received at the warehouse only when its status is 'Approved'.
+    preconditions: [receive return]
+    decision: Returns.ReturnStatus == 'Approved'
+    action: THROW 50031; service maps to 409 Conflict. (Also 50030 if return not found.)
+    entities: [FA-ENT-012]
+    capabilities: [FA-CAP-010]
+    enforcement_layer: sql_procedure
+    evidence: database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust (THROW 50031)
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Return_receipt_..._requires_approval
+
+  - id: FA-RULE-020
+    name: Return receipt restocks inventory and marks return Received (not refunded)
+    description: >
+      Receiving an approved return inserts a ReturnReceipt, increases Inventory.QuantityOnHand
+      by the returned quantities, writes WarehouseAdjustments ('Return restock'), and sets
+      the return to 'Received'. It explicitly does NOT change any financial/refund status.
+    preconditions: [return Approved; not already received]
+    decision: n/a (deterministic effect once eligible)
+    action: Insert ReturnReceipt ('Restocked'); Inventory.QuantityOnHand += returned qty; insert WarehouseAdjustments; Returns.ReturnStatus = 'Received'.
+    entities: [FA-ENT-013, FA-ENT-005, FA-ENT-014, FA-ENT-012]
+    capabilities: [FA-CAP-010]
+    enforcement_layer: sql_procedure
+    evidence: database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests asserts restock + status 'Received'
+
+  - id: FA-RULE-021
+    name: Return receipt idempotency
+    description: A return may be received at most once; a repeat returns the existing receipt without double-restocking.
+    preconditions: [receive return]
+    decision: existing ReturnReceipt for the ReturnId
+    action: Return the existing receipt id and commit without further changes. Backed by UQ_ReturnReceipts_Return.
+    entities: [FA-ENT-013]
+    capabilities: [FA-CAP-010]
+    enforcement_layer: sql_procedure + db_constraint
+    evidence:
+      - database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust (idempotency guard)
+      - database/schema/04_fulfillment.sql:UQ_ReturnReceipts_Return
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests (no double restock on repeat)
+
+  - id: FA-RULE-022
+    name: Activity summary order classification
+    description: The warehouse activity summary classifies touched orders by OrderSource ('OrderDesk' = staff, 'CustomerPortal' = web).
+    preconditions: [activity summary requested]
+    decision: COUNT DISTINCT orders by OrderSource
+    action: Report StaffOrders vs WebOrders per warehouse.
+    entities: [FA-ENT-001]
+    capabilities: [FA-CAP-013]
+    enforcement_layer: sql_procedure
+    evidence: database/procedures/procedures.sql:usp_WarehouseActivitySummary
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-023
+    name: API key required
+    description: All endpoints except Swagger, root, /health, and /openapi require a valid X-Api-Key header.
+    preconditions: [any request]
+    decision: header X-Api-Key equals configured ApiKey (default 'dev-fulfillment-key')
+    action: Otherwise 401 Unauthorized JSON; exempt paths bypass the check.
+    entities: []
+    capabilities: [all]
+    enforcement_layer: middleware
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Api/Security/ApiKeyMiddleware.cs
+    confidence: high
+    verification: static_verified
+
+  - id: FA-RULE-024
+    name: Centralized error mapping
+    description: >
+      Service results carry an error kind mapped to HTTP status (NotFound->404, Conflict->409,
+      Validation->400); unhandled exceptions become a 500 RFC7807 problem+json response.
+    preconditions: [request processed]
+    decision: ApiResult.ErrorKind / unhandled exception
+    action: FromResult maps the status; ExceptionHandlingMiddleware emits problem+json on 500.
+    entities: []
+    capabilities: [all]
+    enforcement_layer: csharp_web + middleware
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/FulfillmentControllerBase.cs:FromResult
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Middleware/ExceptionHandlingMiddleware.cs
+    confidence: high
+    verification: static_verified

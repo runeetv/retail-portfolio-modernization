@@ -1,0 +1,159 @@
+# LegacyRetailPortfolio — Cross-Application Dependencies (Stage 2)
+# Dependencies are DATA-mediated (shared SQL database); there are no direct code/API calls
+# between the three applications. verification: static_verified unless noted.
+version: 1
+
+integration_style:
+  mechanism: shared SQL Server database (LegacyRetailDB); each app has its own DbContext over shared + owned tables
+  direct_calls_between_apps: none observed (no HTTP/queue/service references across apps)
+  shared_code: "LegacyRetail.Common only (DbConnectionConfig + PasswordHasher) — infrastructure, no business logic/entities"
+  evidence:
+    - "Each app references only its own projects + LegacyRetail.Common (csproj ProjectReferences)"
+    - src/*/*.Infrastructure/*DbContext.cs (per-app contexts over the same physical tables)
+
+dependencies:
+  - id: DEP-ORDER-HANDOFF
+    producer: [APP-ORDERDESK, APP-PORTAL]
+    consumer: APP-FULFILL
+    shared_entity: CE-ORDER (dbo.Orders) + CE-ORDER-LINE (dbo.OrderLines)
+    nature: >
+      OrderDesk and CustomerPortal CREATE orders (OrderSource 'OrderDesk'/'CustomerPortal', status
+      'Confirmed'). FulfillmentAPI READS them as a work queue (Confirmed/Allocated) and advances
+      OrderStatus through Allocated -> Picking -> Packed -> Shipped -> Delivered. No app calls another;
+      the handoff is the shared Orders row + its status column.
+    direction: data_handoff (producers -> consumer via status)
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#CreateStaffOrderAsync
+        - database/procedures/procedures.sql#usp_ConvertQuoteToOrder
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+        - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs#GetPendingOrdersAsync
+        - database/procedures/procedures.sql#usp_AllocateInventory
+      tests:
+        - "tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowA_staff_quote_to_order_then_warehouse_fulfillment (behavior_verified, passed)"
+        - "tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowD_cancellation_blocks_fulfillment (behavior_verified, passed)"
+        - "FulfillmentWorkflowTests + per-app tests exercise each side"
+      stage1: [OD-CAP-010, CP-CAP-009, FA-CAP-001, FA-CAP-003]
+
+  - id: DEP-SHIPMENT-READ
+    producer: APP-FULFILL
+    consumer: [APP-PORTAL, APP-ORDERDESK]
+    shared_entity: CE-SHIPMENT (dbo.Shipments) + CE-CARRIER-EVENT (dbo.CarrierEvents)
+    nature: >
+      FulfillmentAPI is the sole writer of shipments and carrier events. CustomerPortal (customer
+      tracking) and OrderDesk (CS lookup) READ them for presentation only. Confirmed: both reader apps
+      map these tables and their services issue queries without writes.
+    direction: data_read (consumer reads producer-owned tables)
+    verification: static_verified
+    evidence:
+      source:
+        - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs (writer)
+        - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs#GetOrderTrackingAsync (reader)
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#GetShipmentsAsync (reader)
+      stage1: [FA-CAP-008, CP-CAP-014, OD-CAP-016]
+
+  - id: DEP-RETURN-CHAIN
+    producer: APP-PORTAL
+    intermediary: APP-ORDERDESK
+    consumer: APP-FULFILL
+    shared_entity: CE-RETURN (dbo.Returns) + CE-RETURN-LINE (dbo.ReturnLines)
+    nature: >
+      CustomerPortal creates a return ('Requested'); OrderDesk transitions it to 'Approved'/'Rejected';
+      FulfillmentAPI (via usp_ReceiveReturnAndAdjust) accepts only 'Approved' returns, sets 'Received',
+      and restocks inventory. A three-app data chain over a single Returns row.
+    direction: data_chain (Portal -> OrderDesk -> FulfillmentAPI via ReturnStatus)
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs#RequestReturnAsync
+        - src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs#ReviewAsync
+        - database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust
+      tests: [tests/IntegrationTests/FulfillmentWorkflowTests.cs#Return_receipt_..._requires_approval (passed)]
+      stage1: [CP-CAP-012, OD-CAP-013, FA-CAP-010]
+
+  - id: DEP-INVENTORY-SHARED
+    producer: APP-FULFILL (mutations)
+    consumer: [APP-ORDERDESK, APP-PORTAL]
+    shared_entity: CE-INVENTORY (dbo.Inventory)
+    nature: >
+      FulfillmentAPI mutates Inventory (QuantityAllocated on allocation; QuantityOnHand on return
+      restock). OrderDesk and CustomerPortal READ the same table for availability checks. Base
+      quantities are also maintained by an external/seed process not in any app.
+    direction: data_read (+ external writer for base stock)
+    verification: behavior_verified
+    evidence:
+      source:
+        - database/procedures/procedures.sql#usp_AllocateInventory, #usp_ReceiveReturnAndAdjust (writers)
+        - src/OrderDesk/OrderDesk.Application/CatalogService.cs#IsAvailableAsync (reader)
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (reader, recheck)
+      tests: [tests/IntegrationTests/FulfillmentWorkflowTests.cs#Allocation_reserves_stock_and_blocks_over_allocation (passed)]
+      stage1: [FA-CAP-003, OD-CAP-004, CP-CAP-005]
+
+  - id: DEP-CANCEL-GUARD
+    producer: [APP-PORTAL, APP-ORDERDESK]
+    consumer: APP-FULFILL
+    shared_entity: CE-ORDER (dbo.Orders.OrderStatus)
+    nature: >
+      When CustomerPortal or OrderDesk sets an order 'Cancelled', FulfillmentAPI's usp_AllocateInventory
+      refuses to allocate it (THROW 50021). A data-mediated guard: cancellation by one app blocks
+      downstream fulfillment in another.
+    direction: data_guard (cancel propagates via status; fulfillment rejects)
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs#RequestCancellationAsync
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#CancelOrderAsync
+        - database/procedures/procedures.sql#usp_AllocateInventory (THROW 50021)
+      tests: [tests/IntegrationTests/FulfillmentWorkflowTests.cs#Allocation_blocked_for_cancelled_order (passed)]
+      stage1: [CP-CAP-011, OD-CAP-012, FA-RULE-004]
+
+  - id: DEP-REPORT-JOIN
+    producer: APP-FULFILL (the report)
+    reads_from: [PF-DOM-FULFILL own tables, CE-ORDER, CE-CUSTOMER, CE-SALES-AGENT]
+    shared_entity: "cross-domain read join"
+    nature: >
+      usp_WarehouseActivitySummary (called only by FulfillmentAPI) joins fulfillment-owned tables with
+      shared Orders/Customers AND the OrderDesk-owned SalesAgents table (via Orders.PlacedByAgentId),
+      classifying orders as staff vs web by OrderSource. This is the single SQL object whose read spans
+      all three business domains. FulfillmentAPI does not write any of the external tables here.
+    direction: cross_domain_read (reporting only)
+    verification: static_verified
+    evidence:
+      source: [database/procedures/procedures.sql#usp_WarehouseActivitySummary]
+      stage1: [FA-CAP-013]
+    note: >
+      dbo.SalesAgents is OrderDesk-owned (CE-SALES-AGENT); FulfillmentAPI reaches it ONLY inside this
+      reporting procedure. No functional dependency on OrderDesk code is inferred — purely a data read.
+
+  - id: DEP-COMMISSION-WRITE
+    producer: APP-ORDERDESK (via SQL proc)
+    shared_entity: CE-SALES-COMMISSION (dbo.SalesCommissions) + CE-ORDER
+    nature: >
+      usp_ConvertQuoteToOrder (OrderDesk) writes both an Order (shared) and a SalesCommission
+      (OrderDesk-owned) in one transaction. Intra-OrderDesk, but noted because it creates the shared
+      Orders row that FulfillmentAPI later consumes (feeds DEP-ORDER-HANDOFF).
+    direction: internal (OrderDesk) feeding DEP-ORDER-HANDOFF
+    verification: behavior_verified
+    evidence:
+      source: [database/procedures/procedures.sql#usp_ConvertQuoteToOrder]
+      tests: [tests/IntegrationTests/OrderDeskWorkflowTests.cs (quote->order passed)]
+      stage1: [OD-CAP-009]
+
+shared_tables_matrix:
+  # table: { writers: [...], readers: [...] }
+  dbo.Orders:        { writers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL], readers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL] }
+  dbo.OrderLines:    { writers: [APP-ORDERDESK, APP-PORTAL], readers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL] }
+  dbo.Customers:     { writers: [APP-ORDERDESK, APP-PORTAL], readers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL (report)] }
+  dbo.Products:      { writers: [external/seed], readers: [APP-ORDERDESK, APP-PORTAL] }
+  dbo.ProductCategories: { writers: [external/seed], readers: [APP-ORDERDESK, APP-PORTAL] }
+  dbo.Inventory:     { writers: [APP-FULFILL, external/seed], readers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL] }
+  dbo.Returns:       { writers: [APP-PORTAL (Requested), APP-ORDERDESK (Approved/Rejected), APP-FULFILL (Received)], readers: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL] }
+  dbo.ReturnLines:   { writers: [APP-PORTAL], readers: [APP-FULFILL] }
+  dbo.Shipments:     { writers: [APP-FULFILL], readers: [APP-FULFILL, APP-PORTAL, APP-ORDERDESK] }
+  dbo.CarrierEvents: { writers: [APP-FULFILL], readers: [APP-FULFILL, APP-PORTAL] }
+  dbo.SalesAgents:   { writers: [external/seed], readers: [APP-ORDERDESK, APP-FULFILL (report only)] }
+
+notes:
+  - "Shared database access is NOT treated as a functional dependency unless a concrete read/write handoff was traced (above)."
+  - "No application invokes another application's code or API; all coupling is through the shared schema."

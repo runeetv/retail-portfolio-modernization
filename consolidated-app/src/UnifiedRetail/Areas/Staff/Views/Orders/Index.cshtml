@@ -1,0 +1,15 @@
+@model List<OrderDesk.Domain.Order>
+@{
+    ViewData["Title"] = "Orders";
+}
+<h1>Orders (staff)</h1>
+<p><a class="btn" asp-action="Create">New staff order</a></p>
+<table>
+    <thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Source</th><th>Total</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var o in Model)
+    {
+        <tr><td>@o.OrderNumber</td><td>@o.Customer?.FullName</td><td>@o.OrderStatus</td><td>@o.OrderSource</td><td>@o.GrandTotal.ToString("C")</td><td><a asp-action="Details" asp-route-id="@o.OrderId">View</a></td></tr>
+    }
+    </tbody>
+</table>

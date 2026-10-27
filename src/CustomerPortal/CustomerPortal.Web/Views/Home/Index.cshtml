@@ -1,0 +1,13 @@
+@{
+    ViewData["Title"] = "Welcome";
+}
+<div class="p-5 bg-light rounded-3">
+    <h1 class="display-5">Welcome to RetailShop</h1>
+    <p class="lead">Browse the catalog, manage your cart, track shipments, and request returns.</p>
+    <a class="btn btn-primary btn-lg" asp-controller="Catalog" asp-action="Index">Start shopping</a>
+    @if (User.Identity?.IsAuthenticated != true)
+    {
+        <a class="btn btn-outline-secondary btn-lg" asp-controller="Account" asp-action="Login">Sign in</a>
+        <p class="mt-3 text-muted">Demo login: any seeded username like <code>user1</code> with password <code>Password123!</code></p>
+    }
+</div>

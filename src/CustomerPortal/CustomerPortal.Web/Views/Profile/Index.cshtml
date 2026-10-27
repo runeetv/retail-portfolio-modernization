@@ -1,0 +1,21 @@
+@model ProfileViewModel
+@{
+    ViewData["Title"] = "My Profile";
+}
+<h2>My profile</h2>
+<p class="text-muted">
+    @Model.FirstName @Model.LastName (@Model.Email) &mdash; status <strong>@Model.CustomerStatus</strong>
+    <br/><small>Name, email and status are managed by our staff. You can update your contact and shipping details below.</small>
+</p>
+<form method="post" asp-action="Index">
+    @Html.AntiForgeryToken()
+    <div class="mb-3"><label class="form-label">Phone</label><input asp-for="Phone" class="form-control" /></div>
+    <div class="mb-3"><label class="form-label">Shipping address</label><input asp-for="ShipAddressLine" class="form-control" /></div>
+    <div class="row">
+        <div class="col"><label class="form-label">City</label><input asp-for="ShipCity" class="form-control" /></div>
+        <div class="col"><label class="form-label">Region</label><input asp-for="ShipRegion" class="form-control" /></div>
+        <div class="col"><label class="form-label">Postal</label><input asp-for="ShipPostalCode" class="form-control" /></div>
+        <div class="col"><label class="form-label">Country</label><input asp-for="ShipCountry" class="form-control" /></div>
+    </div>
+    <button class="btn btn-primary mt-3">Save</button>
+</form>

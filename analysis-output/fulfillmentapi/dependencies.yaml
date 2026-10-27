@@ -1,0 +1,254 @@
+# FulfillmentAPI — Dependency Analysis (code, database, external)
+version: 1
+application: FulfillmentAPI
+
+runtime:
+  entry_project: src/FulfillmentAPI/FulfillmentAPI.Api (Microsoft.NET.Sdk.Web, net10.0, GenerateDocumentationFile)
+  startup: src/FulfillmentAPI/FulfillmentAPI.Api/Program.cs
+  api_style: controller-based Web API, routes under api/fulfillment/*, [Produces("application/json")]
+  openapi: Swashbuckle.AspNetCore 10.3.1; SwaggerDoc v1; ApiKey security scheme (header X-Api-Key); XML comments included
+  authentication: "ApiKeyMiddleware — X-Api-Key must equal config[ApiKey] (default 'dev-fulfillment-key'); exempt paths: /swagger*, /, /health, /openapi*"
+  authorization: none beyond the API key (no per-user identity/roles); machine-to-machine
+  error_handling: ExceptionHandlingMiddleware -> 500 application/problem+json; ApiResult.ErrorKind -> 400/404/409 via FulfillmentControllerBase.FromResult
+  health_endpoint: GET /health (minimal API, no key required)
+  middleware_order: ExceptionHandlingMiddleware -> Swagger/SwaggerUI -> ApiKeyMiddleware -> MapGet(/health) + MapControllers
+  db_access_tech: EF Core (Microsoft.EntityFrameworkCore.SqlServer) + raw ADO (Microsoft.Data.SqlClient 6.1.7) for stored procedures
+  connection: DbConnectionConfig.Resolve(config.GetConnectionString("LegacyRetailDB")) -> env LEGACYRETAIL_CONNECTION else LocalDB default
+  resilience: DbContext UseSqlServer(EnableRetryOnFailure)
+
+project_dependencies:
+  - FulfillmentAPI.Api -> FulfillmentAPI.Application, FulfillmentAPI.Domain, FulfillmentAPI.Infrastructure, Shared/LegacyRetail.Common
+  - FulfillmentAPI.Application -> FulfillmentAPI.Domain, FulfillmentAPI.Infrastructure
+  - FulfillmentAPI.Infrastructure -> FulfillmentAPI.Domain, Shared/LegacyRetail.Common
+  - FulfillmentAPI.Domain -> (none)
+
+nuget_packages:
+  - Microsoft.EntityFrameworkCore.SqlServer (Infrastructure, Api)
+  - Microsoft.EntityFrameworkCore.Relational (Application)
+  - Microsoft.Data.SqlClient 6.1.7 (Application)
+  - Swashbuckle.AspNetCore 10.3.1 (Api)
+  - System.Security.Cryptography.Pkcs 9.0.22 (transitive pin)
+
+shared_code_dependencies:
+  - LegacyRetail.Common.DbConnectionConfig: connection-string resolution only
+  # FulfillmentAPI does not use LegacyRetail.Common.PasswordHasher.
+
+di_registrations:
+  dbcontext: FulfillmentDbContext (scoped, EnableRetryOnFailure)
+  scoped_services: [FulfillmentQueryService, AllocationService, PickingService, ShipmentService, ReturnReceiptService]
+
+database_access:
+  # access: R=read, W=write, X=execute; owner reflects which app maintains the data (logical, not exclusive)
+  - object: dbo.Warehouses
+    type: table
+    access: [R]
+    owner: fulfillment (logical) / reference
+    app_entity: Warehouse (FA-ENT-001)
+    purpose: Warehouse reference list + activity reporting anchor.
+    evidence: FulfillmentQueryService.GetWarehousesAsync; FulfillmentDbContext(Warehouse)
+  - object: dbo.WarehouseBins
+    type: table
+    access: [R]
+    owner: fulfillment (logical) / reference
+    app_entity: WarehouseBin (FA-ENT-002)
+    purpose: Bin assignment for pick-list items.
+    evidence: PickingService.CreatePickListAsync
+  - object: dbo.Orders
+    type: table
+    access: [R, W]
+    owner: shared (records produced externally; this app updates OrderStatus)
+    app_entity: FulfillmentOrder (FA-ENT-003)
+    purpose: Read pending/specific orders; advance OrderStatus through fulfillment stages.
+    evidence: FulfillmentQueryService; PickingService; ShipmentService; usp_AllocateInventory
+    external_dependency: EXT-ORDERS
+  - object: dbo.OrderLines
+    type: table
+    access: [R]
+    owner: shared (produced externally)
+    app_entity: FulfillmentOrderLine (FA-ENT-004)
+    purpose: Per-product quantities to allocate/fulfill.
+    evidence: FulfillmentQueryService; usp_AllocateInventory
+    external_dependency: EXT-ORDERS
+  - object: dbo.Inventory
+    type: table
+    access: [R, W]
+    owner: shared (base quantities external; this app mutates allocation + restock)
+    app_entity: StockRecord (FA-ENT-005)
+    purpose: Availability; QuantityAllocated incremented on allocation; QuantityOnHand increased on return restock.
+    evidence: FulfillmentQueryService.GetStockAsync; usp_AllocateInventory; usp_ReceiveReturnAndAdjust
+    external_dependency: EXT-INVENTORY
+  - object: dbo.InventoryAllocations
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: InventoryAllocation (FA-ENT-006)
+    purpose: Stock reservations per order/product/warehouse.
+    evidence: usp_AllocateInventory (insert); AllocationService.GetAllocationsAsync; PickingService (read)
+  - object: dbo.PickLists
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: PickList (FA-ENT-007)
+    purpose: Pick tasks per order.
+    evidence: PickingService
+  - object: dbo.PickListItems
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: PickListItem (FA-ENT-008)
+    purpose: Items to pick with target/picked quantities + bin.
+    evidence: PickingService
+  - object: dbo.Shipments
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: Shipment (FA-ENT-009)
+    purpose: Outbound shipments + status lifecycle.
+    evidence: ShipmentService; FulfillmentQueryService
+  - object: dbo.ShipmentPackages
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: ShipmentPackage (FA-ENT-010)
+    purpose: Packages within a shipment (unique code).
+    evidence: ShipmentService.CreateShipmentWithPackageAsync
+  - object: dbo.CarrierEvents
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: CarrierEvent (FA-ENT-011)
+    purpose: Idempotent tracking events for shipments.
+    evidence: ShipmentService.RecordCarrierEventAsync
+  - object: dbo.Returns
+    type: table
+    access: [R, W]
+    owner: shared (returns created + approved externally; this app sets 'Received')
+    app_entity: ReturnForReceipt (FA-ENT-012)
+    purpose: Validate receipt eligibility; mark Received on warehouse receipt.
+    evidence: ReturnReceiptService; usp_ReceiveReturnAndAdjust
+    external_dependency: EXT-RETURNS
+  - object: dbo.ReturnLines
+    type: table
+    access: [R]
+    owner: shared (produced externally)
+    app_entity: "(no dedicated C# entity; read inside usp_ReceiveReturnAndAdjust)"
+    purpose: Quantities to restock during return receipt.
+    evidence: database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust
+    external_dependency: EXT-RETURNS
+  - object: dbo.ReturnReceipts
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: ReturnReceipt (FA-ENT-013)
+    purpose: Record of received returns (one per return).
+    evidence: ReturnReceiptService; usp_ReceiveReturnAndAdjust
+  - object: dbo.WarehouseAdjustments
+    type: table
+    access: [R, W]
+    owner: fulfillment
+    app_entity: WarehouseAdjustment (FA-ENT-014)
+    purpose: Inventory adjustment entries (restock from returns).
+    evidence: ReturnReceiptService.GetAdjustmentsForReceiptAsync; usp_ReceiveReturnAndAdjust
+  - object: dbo.Products
+    type: table
+    access: [R]
+    owner: shared (produced externally)
+    app_entity: "(referenced by FK only; no FulfillmentAPI entity reads Products directly)"
+    purpose: FK target for allocations/pick items/adjustments; not queried by name in app code.
+    evidence: database/schema/04_fulfillment.sql (FKs to dbo.Products)
+    external_dependency: EXT-PRODUCTS
+  - object: dbo.Customers
+    type: table
+    access: [R]
+    owner: shared (produced externally)
+    app_entity: "(no C# entity; read only inside usp_WarehouseActivitySummary)"
+    purpose: Distinct-customer counts in the activity summary.
+    evidence: database/procedures/procedures.sql:usp_WarehouseActivitySummary
+    external_dependency: EXT-CUSTOMERS
+  - object: dbo.SalesAgents
+    type: table
+    access: [R]
+    owner: external (not a FulfillmentAPI table; no C# entity)
+    app_entity: "(none; read only inside usp_WarehouseActivitySummary via Orders.PlacedByAgentId)"
+    purpose: Distinct-agent counts in the cross-domain activity summary.
+    evidence: database/procedures/procedures.sql:usp_WarehouseActivitySummary
+    external_dependency: EXT-SALESAGENTS
+
+stored_procedures:
+  - name: usp_AllocateInventory
+    access: X
+    called_by: AllocationService.AllocateAsync (FA-CAP-003)
+    reads: [Orders, OrderLines, InventoryAllocations, Inventory]
+    writes: [Inventory, InventoryAllocations, Orders]
+    behavior: XACT_ABORT; UPDLOCK/HOLDLOCK on Orders + Inventory; THROW 50020/50021/50022; cursor over unallocated products; idempotent-skips already-allocated.
+    evidence: database/procedures/procedures.sql
+  - name: usp_ReceiveReturnAndAdjust
+    access: X
+    called_by: ReturnReceiptService.ReceiveAsync (FA-CAP-010)
+    reads: [ReturnReceipts, Returns, ReturnLines]
+    writes: [ReturnReceipts, Inventory, WarehouseAdjustments, Returns]
+    behavior: XACT_ABORT; idempotent on ReturnReceipts.ReturnId; THROW 50030/50031; restock + adjust; sets Returns 'Received'; no refund change.
+    evidence: database/procedures/procedures.sql
+  - name: usp_WarehouseActivitySummary
+    access: X
+    called_by: FulfillmentQueryService.GetActivitySummaryAsync (FA-CAP-013)
+    reads: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+    writes: []
+    behavior: Cross-domain aggregate report; classifies StaffOrders/WebOrders by Orders.OrderSource; joins SalesAgents via Orders.PlacedByAgentId.
+    evidence: database/procedures/procedures.sql
+
+cross_domain_joins:
+  - location: usp_WarehouseActivitySummary
+    spans: [fulfillment-owned (Warehouses/PickLists/InventoryAllocations/Shipments), shared (Orders/Customers), external (SalesAgents)]
+    note: >
+      A reporting join that reaches the SalesAgents table (not a FulfillmentAPI table) via
+      Orders.PlacedByAgentId. Recorded as a cross-domain data dependency; the behavior of
+      whatever maintains SalesAgents is not inferred.
+
+external_dependencies:
+  - id: EXT-ORDERS
+    object: dbo.Orders / dbo.OrderLines
+    nature: >
+      Orders and their lines are produced by external applications (OrderSource allows
+      'OrderDesk' and 'CustomerPortal'; PlacedByAgentId is set externally). FulfillmentAPI
+      reads them and updates only OrderStatus. Producer behavior not inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-INVENTORY
+    object: dbo.Inventory
+    nature: Base stock quantities are maintained externally; this app only adjusts QuantityAllocated (allocation) and QuantityOnHand (return restock).
+    confidence: high
+    verification: static_verified
+  - id: EXT-RETURNS
+    object: dbo.Returns / dbo.ReturnLines
+    nature: >
+      Returns are created and approved outside this application; usp_ReceiveReturnAndAdjust
+      requires status 'Approved' and sets 'Received'. Earlier lifecycle (Requested/Approved/
+      Rejected) is external. Producer behavior not inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-PRODUCTS
+    object: dbo.Products
+    nature: Product master data; FK target only, produced externally. Not inferred.
+    confidence: medium
+    verification: static_verified
+  - id: EXT-CUSTOMERS
+    object: dbo.Customers
+    nature: Read only inside the activity-summary procedure for distinct-customer counts; produced externally.
+    confidence: high
+    verification: static_verified
+  - id: EXT-SALESAGENTS
+    object: dbo.SalesAgents
+    nature: >
+      Not a FulfillmentAPI table and has no C# entity; read only inside
+      usp_WarehouseActivitySummary (joined via Orders.PlacedByAgentId) for distinct-agent
+      counts. Owner/producer not inferred.
+    confidence: high
+    verification: static_verified
+
+shared_physical_tables_note: >
+  dbo.Orders, dbo.OrderLines, dbo.Inventory, dbo.Returns, dbo.ReturnLines, dbo.Products,
+  dbo.Customers are declared in database/schema/01_schema.sql whose header states the
+  database is a single schema shared by multiple applications. FulfillmentAPI defines its
+  own narrow entity shapes over them. Database access is not treated as proof of exclusive
+  ownership.

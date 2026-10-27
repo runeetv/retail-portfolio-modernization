@@ -1,0 +1,91 @@
+# Cross-App Workflow Evaluation — Stage 3
+# Scoring unit = one ground-truth workflow (5: WF-A..E). Step-level + workflow-level results.
+# A workflow can be partially correct if one transition/participant differs.
+version: 1
+evaluation_unit: ground_truth_workflow
+ground_truth_file: benchmark/ground-truth/cross-app-workflows.yaml
+prediction_file: analysis-output/portfolio/cross-app-workflows.yaml
+
+workflows:
+  - gt: WF-A-STAFF-ORDER
+    gt_apps: [APP-ORDERDESK, APP-FULFILL]
+    predicted: XWF-A
+    predicted_apps: [APP-ORDERDESK, APP-FULFILL]
+    participants_match: true
+    steps_gt: 7       # quote create/lines/discount/convert + allocate/pick/package-dispatch
+    steps_covered: 7  # XWF-A step1 (convert, folding quote build) + step2 (allocate) + step3 (pick/pack/ship)
+    ordering_match: true
+    classification: exact
+    note: >
+      Prediction compresses the four OrderDesk quote-building steps into "convert quote to order" (step 1)
+      but references the quote lifecycle; fulfillment steps fully represented. Same test cited
+      (WorkflowA_staff_quote_to_order_then_warehouse_fulfillment). Behavior-verified both sides.
+
+  - gt: WF-B-CHECKOUT
+    gt_apps: [APP-PORTAL, APP-FULFILL]
+    predicted: XWF-B
+    predicted_apps: [APP-PORTAL, APP-FULFILL]
+    participants_match: true
+    steps_gt: 5       # cart, coupon, checkout, fulfill, tracking
+    steps_covered: 3  # checkout, fulfill, tracking (cart+coupon folded as preconditions)
+    ordering_match: true
+    classification: exact
+    note: >
+      End-to-end checkout->fulfill->track correctly modeled. Prediction honestly marks it
+      source_verified (not behavior_verified) because no single cross-app test drives the whole chain —
+      matches GT's own note ("covered via CheckoutService idempotency + shipment visibility tests").
+      Cart/coupon treated as preconditions rather than workflow steps; acceptable abstraction.
+
+  - gt: WF-C-RETURN
+    gt_apps: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    predicted: XWF-C
+    predicted_apps: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    participants_match: true
+    steps_gt: 3
+    steps_covered: 3
+    ordering_match: true
+    classification: exact
+    note: request('Requested') -> approve('Approved') -> receive('Received')+restock. Exact incl. ownership per stage and matching test.
+
+  - gt: WF-D-CANCEL
+    gt_apps: [APP-PORTAL, APP-FULFILL]
+    predicted: XWF-D
+    predicted_apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    participants_match: partial
+    steps_gt: 2
+    steps_covered: 2
+    ordering_match: true
+    classification: partial
+    severity: low
+    note: >
+      GT scopes WF-D to the CUSTOMER cancel path (Portal -> FulfillmentAPI block). Prediction models BOTH
+      cancel origins (OrderDesk staff + CustomerPortal shopper) -> FulfillmentAPI block. The customer path
+      GT asserts is fully present and correct; the prediction ADDS the staff-cancel origin as an extra
+      participant. This is a superset, not an error, but it is a participant-set mismatch vs the GT workflow
+      definition, so scored partial. The core transition (cancel => THROW 50021 blocks allocation) is exact.
+      Minor evidence nit: XWF-D step1 cites OD-CAP-011 (order view) where OD-CAP-012 (cancel) was intended.
+
+  - gt: WF-E-WAREHOUSE
+    gt_apps: [APP-FULFILL]
+    predicted: none (intentionally out of scope)
+    participants_match: n/a
+    classification: out_of_scope
+    severity: none
+    note: >
+      WF-E is a SINGLE-APP (FulfillmentAPI-only) warehouse flow. The Stage 2 file is explicitly scoped to
+      CROSS-app workflows, so WF-E is legitimately excluded there. However, the warehouse flow IS captured
+      in Stage 1 (FA workflows + UNQ-FULFILL, test Full_warehouse_flow_allocate_pick_package_dispatch). Scored
+      on a separate line as 'discovered intra-app, out of cross-app scope' — NOT counted as a cross-app FN.
+
+step_level_summary:
+  gt_cross_app_workflows: 4    # WF-A..D (WF-E excluded as single-app)
+  workflow_level_exact: 3      # A, B, C
+  workflow_level_partial: 1    # D (participant superset)
+  workflow_level_missed: 0
+  wf_e_single_app: discovered_in_stage1_out_of_stage2_scope
+
+summary:
+  participants_accuracy: "3 exact + 1 superset(partial) of 4 cross-app workflows"
+  ordering_accuracy: 4/4 correct ordering
+  error_paths: "cancel-block (50021), over-allocation (50022), approved-only receipt (50031) all represented"
+  notable: XWF-D evidence cites OD-CAP-011 instead of OD-CAP-012 (minor traceability slip, not a logic error)

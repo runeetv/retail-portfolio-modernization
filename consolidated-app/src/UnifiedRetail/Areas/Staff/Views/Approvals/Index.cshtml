@@ -1,0 +1,34 @@
+@model List<OrderDesk.Domain.DiscountApproval>
+@{
+    ViewData["Title"] = "Discount approvals";
+}
+<h1>Pending discount approvals</h1>
+@if (Model.Count == 0) { <p>No pending approvals.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Quote</th><th>Requested %</th><th>Notes</th><th>Decision</th></tr></thead>
+        <tbody>
+        @foreach (var a in Model)
+        {
+            <tr>
+                <td>@a.SalesQuote?.QuoteNumber</td>
+                <td>@a.RequestedPercent%</td>
+                <td>@a.Notes</td>
+                <td>
+                    <form class="inline" method="post" asp-action="Decide" asp-route-id="@a.DiscountApprovalId">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="approve" value="true" />
+                        <button class="btn" type="submit">Approve</button>
+                    </form>
+                    <form class="inline" method="post" asp-action="Decide" asp-route-id="@a.DiscountApprovalId">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="approve" value="false" />
+                        <button class="btn secondary" type="submit">Reject</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

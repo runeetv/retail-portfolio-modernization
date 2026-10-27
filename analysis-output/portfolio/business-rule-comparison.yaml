@@ -1,0 +1,150 @@
+# Business Rule Comparison — LegacyRetailPortfolio (Stage 2 consolidation)
+# Reconciles business rules that touch the same concept across more than one application.
+# This does NOT recommend standardizing anything; it only classifies the observed relationship.
+#
+# Classification:
+#   equivalent          - same predicate / same effect in each place (true duplicate)
+#   different_by_context - same concept, intentionally different thresholds/scope per app
+#   contradictory       - rules that would disagree on the same input (conflict)
+#   independent         - app-specific rule with no counterpart elsewhere
+#   complementary       - rules cover different, non-overlapping parts of one lifecycle
+#
+# Verification:
+#   behavior_verified   - divergence/equivalence asserted by a passing test
+#   source_verified     - confirmed by reading source/SQL, no dedicated test
+
+meta:
+  app_keys:
+    APP-ORDERDESK: OrderDesk
+    APP-PORTAL: CustomerPortal
+    APP-FULFILL: FulfillmentAPI
+
+comparisons:
+  - id: RULE-CANCEL
+    concept: Order cancellation eligibility
+    classification: different_by_context
+    note_conflict_risk: >
+      Borders on contradictory: for an order in status 'Allocated' the two apps disagree —
+      OrderDesk permits cancellation (with override + audit), CustomerPortal forbids it. The
+      divergence is BOUNDED to the 'Allocated' state; for Pending/Confirmed both agree. Treated
+      as different_by_context because the apps serve different actors (staff vs self-service) and
+      the OrderDesk path requires an explicit override, not because the rule is accidentally inconsistent.
+    implementations:
+      - app: APP-ORDERDESK
+        rule: Allows cancel from Pending / Confirmed / Allocated; 'Allocated' needs override + audit entry
+        where:
+          - database/procedures/procedures.sql#usp_EvaluateCancellationEligibility
+          - src/OrderDesk/OrderDesk.Application/OrderService.cs#CancelOrderAsync
+        enforcement_layer: SQL stored procedure (+ C# caller)
+        stage1: [OD-RULE-007, OD-RULE-008]
+      - app: APP-PORTAL
+        rule: Allows cancel from Pending / Confirmed ONLY; no self-service cancel once Allocated
+        where:
+          - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CustomerCanCancel
+        enforcement_layer: C# domain rule
+        stage1: [CP-RULE-010]
+    verification: behavior_verified
+    tests:
+      - "tests/.../PortalRulesTests.cs#Cancellation_divergence_from_OrderDesk_is_bounded_to_Allocated (passed)"
+      - "tests/.../OrderDeskWorkflowTests.cs#Cancellation_override_allows_allocated (passed)"
+
+  - id: RULE-MANDATORY-INFO
+    concept: Order requires mandatory customer info (profile completeness guard)
+    classification: equivalent
+    note: >
+      Genuine duplicate. The same predicate (customer must have the mandatory contact/shipping
+      info before an order may be placed) is implemented three times with the same effect.
+    implementations:
+      - app: APP-ORDERDESK
+        rule: CustomerCanOrder guard (C#)
+        where: src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CustomerCanOrder
+        stage1: [OD-RULE-003]
+      - app: APP-ORDERDESK
+        rule: usp_ConvertQuoteToOrder raises THROW 50014 when mandatory info missing (SQL)
+        where: database/procedures/procedures.sql#usp_ConvertQuoteToOrder
+        stage1: [OD-RULE-004]
+      - app: APP-PORTAL
+        rule: Checkout profile guard rejects incomplete profile (C#)
+        where: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+        stage1: [CP-RULE-005]
+    verification: source_verified
+
+  - id: RULE-AVAILABILITY
+    concept: Inventory availability expression (OnHand - Allocated)
+    classification: different_by_context
+    expression_relationship: >
+      The arithmetic expression (OnHand - Allocated) is literally duplicated in all three apps
+      (DUP-AVAIL at the expression level), but each app uses it for a different purpose and with a
+      different effect, so the surrounding capability is a partial overlap (OVL-INVENTORY), not a duplicate.
+    implementations:
+      - app: APP-ORDERDESK
+        rule: Pre-order availability check (read-only), IsAvailableAsync
+        where: src/OrderDesk/OrderDesk.Application/CatalogService.cs#IsAvailableAsync
+        effect: read-only gate before quote/order
+        stage1: [OD-RULE-012]
+      - app: APP-PORTAL
+        rule: Display availability + recheck at checkout (read-only)
+        where: src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs#DisplayAvailabilityAsync
+        effect: read-only presentation + checkout recheck
+        stage1: [CP-RULE-013]
+      - app: APP-FULFILL
+        rule: Physical allocation — writes QtyAllocated
+        where: database/procedures/procedures.sql#usp_AllocateInventory
+        effect: mutating (reserves stock)
+        stage1: [FA-RULE-010]
+    verification: source_verified
+    overlap_ref: [OVL-INVENTORY, DUP-AVAIL]
+
+  - id: RULE-DISCOUNT-APPROVAL
+    concept: Discount approval threshold
+    classification: independent
+    note: OrderDesk-only. No counterpart in CustomerPortal or FulfillmentAPI.
+    implementations:
+      - app: APP-ORDERDESK
+        rule: Discounts above threshold require manager approval
+        where: src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs
+        stage1: [OD-RULE-015]
+    verification: source_verified
+
+  - id: RULE-COUPON-ELIGIBILITY
+    concept: Coupon / promo eligibility
+    classification: independent
+    note: CustomerPortal-only.
+    implementations:
+      - app: APP-PORTAL
+        rule: Coupon validity + eligibility at checkout
+        where: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs
+        stage1: [CP-RULE-016]
+    verification: source_verified
+
+  - id: RULE-RETURN-WINDOW
+    concept: Return window eligibility
+    classification: independent
+    note: >
+      CustomerPortal owns the window check at request time. OrderDesk review and FulfillmentAPI
+      receipt operate on an already-created return (later lifecycle stages), so they are
+      complementary to, not duplicates of, this rule.
+    implementations:
+      - app: APP-PORTAL
+        rule: Return must be within allowed window
+        where: src/CustomerPortal/CustomerPortal.Application/ReturnService.cs
+        stage1: [CP-RULE-019]
+    verification: source_verified
+
+  - id: RULE-IDEMPOTENCY
+    concept: Idempotency / duplicate-suppression guards
+    classification: complementary
+    note: >
+      Different mechanisms guarding different operations — not a shared rule. CustomerPortal
+      guards checkout with an IdempotencyKey unique constraint; FulfillmentAPI guards carrier
+      events and return receipts with their own unique keys.
+    implementations:
+      - app: APP-PORTAL
+        rule: Checkout IdempotencyKey (unique) prevents duplicate orders
+        where: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+        stage1: [CP-RULE-009]
+      - app: APP-FULFILL
+        rule: CarrierEvents unique (ShipmentId, EventCode, EventUtc); return receipt unique (ReturnId)
+        where: database/procedures/procedures.sql
+        stage1: [FA-RULE-018, FA-RULE-019]
+    verification: source_verified

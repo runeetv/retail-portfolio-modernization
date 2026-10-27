@@ -1,0 +1,92 @@
+@model FulfillmentAPI.Domain.FulfillmentOrder
+@{
+    ViewData["Title"] = "Fulfill " + Model.OrderNumber;
+    var allocations = ViewBag.Allocations as List<FulfillmentAPI.Domain.InventoryAllocation> ?? new();
+    var pickLists = ViewBag.PickLists as List<FulfillmentAPI.Domain.PickList> ?? new();
+    var shipments = ViewBag.Shipments as List<FulfillmentAPI.Domain.Shipment> ?? new();
+    var warehouses = ViewBag.Warehouses as List<FulfillmentAPI.Domain.Warehouse> ?? new();
+    int wh = warehouses.FirstOrDefault()?.WarehouseId ?? 1;
+}
+<h1>Fulfill @Model.OrderNumber</h1>
+<div class="card"><strong>Status:</strong> @Model.OrderStatus · <strong>Source:</strong> @Model.OrderSource</div>
+
+<div class="card">
+    <h3>1. Allocate inventory</h3>
+    <form class="inline" method="post" asp-action="Allocate">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="orderId" value="@Model.OrderId" />
+        <select name="warehouseId">@foreach (var w in warehouses) { <option value="@w.WarehouseId">@w.Code</option> }</select>
+        <button class="btn" type="submit">Allocate</button>
+    </form>
+    @if (allocations.Count > 0) { <p>Allocated products: @string.Join(", ", allocations.Select(a => $"P{a.ProductId}×{a.QuantityAllocated}"))</p> }
+</div>
+
+<div class="card">
+    <h3>2. Pick list</h3>
+    <form class="inline" method="post" asp-action="CreatePickList">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="orderId" value="@Model.OrderId" />
+        <input type="hidden" name="warehouseId" value="@wh" />
+        <button class="btn" type="submit">Create pick list</button>
+    </form>
+    @foreach (var pl in pickLists)
+    {
+        <p>PickList #@pl.PickListId — @pl.PickStatus</p>
+        <table>
+            <thead><tr><th>Item</th><th>Product</th><th>ToPick</th><th>Picked</th><th></th></tr></thead>
+            <tbody>
+            @foreach (var it in pl.Items)
+            {
+                <tr>
+                    <td>@it.PickListItemId</td><td>@it.ProductId</td><td>@it.QuantityToPick</td><td>@it.QuantityPicked</td>
+                    <td>
+                        <form class="inline" method="post" asp-action="Pick">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="orderId" value="@Model.OrderId" />
+                            <input type="hidden" name="pickListItemId" value="@it.PickListItemId" />
+                            <input name="quantityPicked" type="number" value="@it.QuantityToPick" min="0" max="@it.QuantityToPick" style="width:70px" />
+                            <button class="btn secondary" type="submit">Pick</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</div>
+
+<div class="card">
+    <h3>3. Package</h3>
+    <form class="inline" method="post" asp-action="Package">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="orderId" value="@Model.OrderId" />
+        <input name="packageCode" placeholder="package code" required />
+        <input name="weightKg" type="number" step="0.01" placeholder="kg" style="width:80px" />
+        <button class="btn" type="submit">Create shipment package</button>
+    </form>
+</div>
+
+<div class="card">
+    <h3>4. Shipments</h3>
+    @foreach (var s in shipments)
+    {
+        <p>Shipment #@s.ShipmentId — @s.ShipmentStatus @(string.IsNullOrEmpty(s.Carrier) ? "" : $"· {s.Carrier} {s.TrackingNumber}")</p>
+        <form class="inline" method="post" asp-action="UpdateShipment">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="orderId" value="@Model.OrderId" />
+            <input type="hidden" name="shipmentId" value="@s.ShipmentId" />
+            <select name="newStatus"><option>Packed</option><option>Dispatched</option><option>InTransit</option><option>Delivered</option><option>Exception</option></select>
+            <input name="carrier" placeholder="carrier" />
+            <input name="trackingNumber" placeholder="tracking #" />
+            <button class="btn secondary" type="submit">Update</button>
+        </form>
+        <form class="inline" method="post" asp-action="CarrierEvent">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="orderId" value="@Model.OrderId" />
+            <input type="hidden" name="shipmentId" value="@s.ShipmentId" />
+            <input name="eventCode" placeholder="event code" required />
+            <input name="description" placeholder="description" />
+            <button class="btn secondary" type="submit">Add event</button>
+        </form>
+    }
+</div>

@@ -1,0 +1,144 @@
+# Overlap Classification Evaluation — Stage 3
+# Scoring unit = one ground-truth overlap scenario (6 total, SCN-1..6).
+# Ground-truth taxonomy: {broadly-shared, partial-overlap}. (app-specific/unique handled in capability-matches.)
+# Prediction taxonomy: {duplicate, partial_overlap, complementary, shared_data_only, unique}.
+# Taxonomy mapping declared in evaluation-methodology.md section 6.
+version: 1
+evaluation_unit: ground_truth_overlap_scenario
+ground_truth_file: benchmark/ground-truth/capability-overlaps.yaml
+prediction_file: analysis-output/portfolio/capability-overlaps.yaml
+
+# gt_class vs predicted_class, after applying the taxonomy map.
+# classification_match: true if predicted class is in the allowed-equivalent set for the gt class.
+scenarios:
+  - gt: SCN-1-CUSTOMER
+    gt_class: broadly-shared
+    predicted: OVL-CUSTOMER
+    predicted_class: partial_overlap
+    discovery_match: true
+    classification_match: false
+    note: >
+      Apps + per-app responsibility correct (full edit / self-service subset / read-only). But GT
+      intends 'broadly-shared'; prediction says 'partial_overlap'. Prediction taxonomy lacks a
+      broadly-shared tier, so this is a systematic under-classification, not a random error.
+    severity: medium
+    adjudicate: true
+
+  - gt: SCN-2-ORDER-CREATE
+    gt_class: partial-overlap
+    predicted: OVL-ORDER-CREATE
+    predicted_class: partial_overlap
+    discovery_match: true
+    classification_match: true
+    severity: none
+
+  - gt: SCN-3-CANCEL
+    gt_class: partial-overlap
+    predicted: OVL-CANCEL
+    predicted_class: partial_overlap
+    discovery_match: true
+    classification_match: true
+    note: Bounded 'Allocated' divergence and SQL-vs-C# enforcement correctly captured.
+    severity: none
+
+  - gt: SCN-4-INVENTORY
+    gt_class: partial-overlap
+    predicted: OVL-INVENTORY
+    predicted_class: partial_overlap
+    discovery_match: true
+    classification_match: true
+    note: Read-check vs recheck vs stateful allocation correctly distinguished; expression dup flagged separately (DUP-AVAIL).
+    severity: none
+
+  - gt: SCN-5-RETURNS
+    gt_class: partial-overlap
+    predicted: OVL-RETURNS
+    predicted_class: complementary
+    discovery_match: true
+    classification_match: true
+    note: >
+      Per the taxonomy map, 'complementary' is an accepted refinement of GT 'partial-overlap' for a
+      lifecycle split across three owners (each owns a distinct, non-duplicated stage). GT's own note
+      ("one business process, three owners; each app owns a distinct lifecycle stage") matches the
+      prediction's complementary rationale. Classification counted as a match; logged for review
+      because taxonomies differ in name.
+    severity: low
+    adjudicate: true
+
+  - gt: SCN-6-SHIPMENT
+    gt_class: broadly-shared
+    predicted: OVL-SHIPMENT
+    predicted_class: partial_overlap
+    discovery_match: true
+    classification_match: false
+    note: >
+      Single source of truth (FA) + two read presentations correctly identified; prediction even notes
+      "bordering shared_data_only". GT intends 'broadly-shared'. Same systematic under-classification
+      as SCN-1. Arguably 'shared_data_only' (also maps to broadly-shared) would have scored a match.
+    severity: medium
+    adjudicate: true
+
+# Extra predicted relationships (no GT overlap scenario)
+extra_predictions:
+  - predicted: OVL-ORDER-VIEW
+    predicted_class: partial_overlap
+    maps_to_gt: none
+    classification: unmatched_prediction
+    severity: low
+    note: Real shared read pattern, but no GT overlap scenario for order viewing. False positive on overlap axis.
+  - predicted: OVL-CATALOG
+    predicted_class: partial_overlap
+    maps_to_gt: SCN-equivalent via CAP-PRODUCT-BROWSE (broadly-shared)
+    classification: classification_mismatch
+    severity: medium
+    note: >
+      GT treats product browsing as broadly-shared capability (CAP-PRODUCT-BROWSE), not one of the six
+      numbered overlap scenarios. Prediction classifies as partial_overlap. Under-classification, same
+      family as SCN-1/SCN-6.
+  - predicted: DUP-MANDATORY-INFO
+    predicted_class: duplicate
+    maps_to_gt: evidence-map DUP-1
+    classification: correct_duplicate
+    severity: none
+    note: Correctly identifies the intentional triplicated mandatory-customer-info validation. Matches GT evidence-map DUP-1.
+  - predicted: DUP-AVAIL
+    predicted_class: duplicate
+    maps_to_gt: evidence-map DUP-2
+    classification: correct_duplicate
+    severity: none
+    note: Correctly identifies the duplicated availability expression (expression-level). Matches GT evidence-map DUP-2.
+  - predicted: SHARED-IDEMPOTENCY
+    predicted_class: complementary
+    maps_to_gt: none (distinct rules CHECKOUT-IDEMPOTENT + CARRIER-EVENT-IDEMPOTENT)
+    classification: acceptable_extra
+    severity: none
+    note: Correctly declines to call the two idempotency mechanisms duplicates; classifies complementary. No GT overlap scenario, but not an error.
+
+# ---- Confusion matrix over the 6 GT scenarios (rows=GT class, cols=predicted mapped class) ----
+# Using the 3-tier GT taxonomy vs the prediction's effective tier.
+# partial_overlap and complementary both count as the "partial" prediction tier for the matrix,
+# per the methodology map; broadly-shared has NO exact predicted tier (always predicted as partial).
+confusion_matrix:
+  classes: [broadly-shared, partial-overlap]
+  # predicted tier buckets actually used by the model for these 6: partial_overlap / complementary
+  matrix:
+    broadly-shared:   { predicted_partial_overlap: 2, predicted_complementary: 0, predicted_broadly_shared: 0 }
+    partial-overlap:  { predicted_partial_overlap: 3, predicted_complementary: 1, predicted_broadly_shared: 0 }
+  interpretation: >
+    4 of 6 scenarios classified in an accepted-equivalent tier (3 partial->partial exact-tier,
+    1 partial->complementary accepted). 2 of 6 (both broadly-shared: SCN-1, SCN-6) were
+    under-classified to partial_overlap because the prediction taxonomy has no broadly-shared tier.
+  false_duplicates: 0        # no scenario wrongly called 'duplicate'
+  missed_partial_overlaps: 0 # all 4 partial-overlaps discovered
+  complementary_called_duplicate: 0
+  shared_data_called_functional_overlap: 2   # SCN-1, SCN-6 (broadly-shared read-sharing framed as functional partial_overlap)
+  unique_merged_into_shared: 0
+
+summary:
+  gt_scenarios: 6
+  discovery_hits: 6          # all six overlap concepts were discovered
+  classification_exact: 3    # SCN-2,3,4 exact tier
+  classification_accepted: 1 # SCN-5 (complementary <- partial-overlap)
+  classification_miss: 2     # SCN-1, SCN-6 (broadly-shared -> partial_overlap)
+  false_positive_overlaps: 1 # OVL-ORDER-VIEW
+  correct_duplicates: 2      # DUP-MANDATORY-INFO, DUP-AVAIL (vs evidence-map DUP-1/DUP-2)

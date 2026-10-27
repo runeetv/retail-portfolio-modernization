@@ -1,0 +1,56 @@
+# Capability overlap map (ground truth) — the six intended overlap scenarios.
+version: 1
+scenarios:
+  - id: SCN-1-CUSTOMER
+    name: Customer management
+    kind: broadly-shared
+    apps:
+      APP-ORDERDESK: Full staff edit of contact + shipping (CustomerService.UpdateContactAsync)
+      APP-PORTAL: Self-service subset only (phone + shipping) (ProfileService.UpdateSelfServiceAsync)
+      APP-FULFILL: Reads shipping fields only (no edit)
+    difference: Editable field set differs per app; status is never customer-editable.
+
+  - id: SCN-2-ORDER-CREATE
+    name: Order creation
+    kind: partial-overlap
+    apps:
+      APP-ORDERDESK: Staff order + quote conversion (OrderService.CreateStaffOrderAsync, QuoteService.ConvertToOrderAsync)
+      APP-PORTAL: Cart checkout (CheckoutService.CheckoutAsync)
+      APP-FULFILL: none
+    difference: Shared Orders/OrderLines tables; different workflow, validation, OrderSource value.
+
+  - id: SCN-3-CANCEL
+    name: Cancellation rules
+    kind: partial-overlap
+    apps:
+      APP-ORDERDESK: SQL rule usp_EvaluateCancellationEligibility (Pending/Confirmed/Allocated) + override
+      APP-PORTAL: C# rule PortalRules.CustomerCanCancel (Pending/Confirmed only)
+      APP-FULFILL: Rejects allocation/shipment for cancelled orders (FulfillmentRules.IsBlockedForFulfillment)
+    difference: Implementation location (SQL vs C#) AND the bounded eligibility divergence on 'Allocated'.
+
+  - id: SCN-4-INVENTORY
+    name: Inventory availability
+    kind: partial-overlap
+    apps:
+      APP-ORDERDESK: Pre-order on-hand-minus-allocated check (CatalogService.IsAvailableAsync)
+      APP-PORTAL: Display availability + recheck at checkout (CatalogBrowseService.DisplayAvailabilityAsync, CheckoutService)
+      APP-FULFILL: Physical reservation via usp_AllocateInventory
+    difference: Read-only check vs recheck vs stateful allocation.
+
+  - id: SCN-5-RETURNS
+    name: Returns lifecycle
+    kind: partial-overlap
+    apps:
+      APP-PORTAL: Creates request ('Requested') (ReturnService.RequestReturnAsync)
+      APP-ORDERDESK: Approves/rejects (ReturnReviewService.ReviewAsync)
+      APP-FULFILL: Receives + restocks via usp_ReceiveReturnAndAdjust
+    difference: One business process, three owners; each app owns a distinct lifecycle stage.
+
+  - id: SCN-6-SHIPMENT
+    name: Shipment tracking visibility
+    kind: broadly-shared
+    apps:
+      APP-FULFILL: Owns shipment + carrier events (ShipmentService)
+      APP-PORTAL: Customer-friendly display (TrackingService, with FriendlyStatus mapping)
+      APP-ORDERDESK: Read-only status for customer service (OrderService.GetShipmentsAsync)
+    difference: Single source of truth, three presentation responsibilities.

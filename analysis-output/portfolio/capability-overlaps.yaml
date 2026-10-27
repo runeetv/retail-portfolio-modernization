@@ -1,0 +1,265 @@
+# LegacyRetailPortfolio — Capability Relationship Classification (Stage 2)
+# relationship: duplicate | partial_overlap | complementary | shared_data_only | unique
+# verification: static_verified (source/SQL inspected) | behavior_verified (test executed) | inferred
+# Phase A proposed these; Phase B verified each against source/SQL. No duplicates were asserted
+# on class-name/table/route similarity alone.
+version: 1
+
+overlaps:
+  - id: OVL-CUSTOMER
+    capability: PF-CAP-CUSTOMER-MANAGE
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    rationale: >
+      All three touch the customer concept but with different responsibilities: OrderDesk edits the
+      full contact/shipping record; CustomerPortal edits only a self-service subset (phone + shipping)
+      and never name/email/status; FulfillmentAPI only counts distinct customers inside a report. Same
+      physical table (dbo.Customers) via different C# models; not duplicate functionality.
+    verification: static_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/CustomerService.cs#UpdateContactAsync (writes all fields)
+        - src/CustomerPortal/CustomerPortal.Application/ProfileService.cs#UpdateSelfServiceAsync (phone + ship only)
+        - database/procedures/procedures.sql#usp_WarehouseActivitySummary (LEFT JOIN dbo.Customers; count only)
+      models_over_table:
+        dbo.Customers: [OrderDesk.Domain.Customer, CustomerPortal.Domain.ShopperProfile, "CustomerPortal.Domain.CustomerAccount (1:1 via CustomerId)"]
+      stage1: [OD-CAP-001, OD-CAP-002, CP-CAP-003, FA-CAP-013]
+
+  - id: OVL-CATALOG
+    capability: PF-CAP-CATALOG-BROWSE
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    rationale: >
+      Both read dbo.Products filtering out discontinued items, but for different audiences (staff
+      quoting vs shopper browsing) and different surfaces (WPF list vs Razor pages + anonymous access).
+      FulfillmentAPI does not browse the catalog. Shared read access, overlapping but not duplicate.
+    verification: static_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/CatalogService.cs#BrowseAsync (Where !IsDiscontinued)
+        - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs#SearchAsync (Where !IsDiscontinued)
+      stage1: [OD-CAP-003, CP-CAP-004, CP-CAP-005]
+
+  - id: OVL-INVENTORY
+    capability: PF-CAP-INVENTORY-AVAILABILITY
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    rationale: >
+      The availability FORMULA (QuantityOnHand - QuantityAllocated) is duplicated across all three
+      (see DUP-AVAIL), but the CAPABILITY is a partial overlap: OrderDesk does a read-only pre-order
+      check, CustomerPortal shows availability + rechecks at checkout (read-only), and FulfillmentAPI
+      is the only app that mutates inventory (reserves stock in usp_AllocateInventory, restocks in
+      usp_ReceiveReturnAndAdjust). Different purpose, timing, and side effects.
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/CatalogService.cs#IsAvailableAsync (read-only)
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (per-line recheck, read-only)
+        - database/procedures/procedures.sql#usp_AllocateInventory (writes Inventory.QuantityAllocated)
+      tests:
+        - tests/IntegrationTests/FulfillmentWorkflowTests.cs#Allocation_reserves_stock_and_blocks_over_allocation (passed)
+        - tests/IntegrationTests/CustomerPortalWorkflowTests.cs#Checkout_rechecks_inventory_and_blocks_when_unavailable (passed)
+      stage1: [OD-CAP-004, CP-CAP-005, FA-CAP-002, FA-CAP-003]
+
+  - id: OVL-ORDER-CREATE
+    capability: PF-CAP-ORDER-CREATE
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    rationale: >
+      Both create rows in the shared dbo.Orders/dbo.OrderLines, but via different workflows and
+      validation: OrderDesk writes OrderSource='OrderDesk' (quote conversion in SQL, or staff order
+      with a stock pre-check); CustomerPortal writes OrderSource='CustomerPortal' via idempotent cart
+      checkout (idempotency key + inventory recheck + coupon discount). Same target structures, distinct
+      business entry paths. Not duplicate — the creation logic and preconditions differ materially.
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#CreateStaffOrderAsync (OrderSource="OrderDesk")
+        - database/procedures/procedures.sql#usp_ConvertQuoteToOrder (INSERT Orders ... 'OrderDesk')
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync (OrderSource="CustomerPortal")
+      tests:
+        - tests/IntegrationTests/OrderDeskWorkflowTests.cs (quote->order passed)
+        - tests/IntegrationTests/CustomerPortalWorkflowTests.cs#Checkout_creates_order_and_is_idempotent (passed)
+      stage1: [OD-CAP-009, OD-CAP-010, CP-CAP-009]
+
+  - id: OVL-ORDER-VIEW
+    capability: PF-CAP-ORDER-VIEW
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    rationale: >
+      All read dbo.Orders but with different scopes: OrderDesk unrestricted; CustomerPortal filtered to
+      the signed-in customer (ownership); FulfillmentAPI filtered to a work queue (Confirmed/Allocated).
+      Shared data, divergent read responsibilities — not duplicate.
+    verification: static_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#ListAsync/GetAsync
+        - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs#GetOwnOrdersAsync (filter CustomerId)
+        - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs#GetPendingOrdersAsync (status filter)
+      stage1: [OD-CAP-011, CP-CAP-010, FA-CAP-001]
+
+  - id: OVL-CANCEL
+    capability: PF-CAP-ORDER-CANCEL
+    relationship: partial_overlap
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    rationale: >
+      Both set dbo.Orders.OrderStatus='Cancelled', but with DIFFERENT eligibility rules, enforcement
+      layers, and an override capability unique to OrderDesk. See business-rule-comparison RULE-CANCEL.
+      FulfillmentAPI does not cancel; it REJECTS fulfillment of cancelled orders (complementary guard).
+    verification: behavior_verified
+    evidence:
+      source:
+        - database/procedures/procedures.sql#usp_EvaluateCancellationEligibility (Pending/Confirmed/Allocated)
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#CancelOrderAsync (override + CancellationOverrides audit)
+        - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CustomerCanCancel (Pending/Confirmed only)
+        - database/procedures/procedures.sql#usp_AllocateInventory (THROW 50021 for cancelled)
+      tests:
+        - tests/CustomerPortal.Tests/PortalRulesTests.cs#Cancellation_divergence_from_OrderDesk_is_bounded_to_Allocated (passed)
+        - tests/IntegrationTests/OrderDeskWorkflowTests.cs#Cancellation_override_requires_authorized_agent_and_writes_audit (passed)
+      stage1: [OD-CAP-012, CP-CAP-011]
+
+  - id: OVL-SHIPMENT
+    capability: PF-CAP-SHIPMENT-TRACK
+    relationship: partial_overlap
+    apps: [APP-FULFILL, APP-PORTAL, APP-ORDERDESK]
+    rationale: >
+      FulfillmentAPI is the single writer/owner of dbo.Shipments + dbo.CarrierEvents. CustomerPortal
+      and OrderDesk both READ this data (confirmed: their DbContexts map Shipments/CarrierEvents and
+      their services only query). Shared source of truth, multiple read presentations — partial overlap
+      bordering shared_data_only for the two readers.
+    verification: static_verified
+    evidence:
+      source:
+        - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs (writes Shipments, CarrierEvents)
+        - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs#GetOrderTrackingAsync (read-only + FriendlyStatus)
+        - src/OrderDesk/OrderDesk.Application/OrderService.cs#GetShipmentsAsync (read-only)
+      models_over_table:
+        dbo.Shipments: ["FulfillmentAPI.Domain.Shipment (writer)", "CustomerPortal.Domain.TrackedShipment (RO)", "OrderDesk.Domain.ShipmentStatusView (RO)"]
+        dbo.CarrierEvents: ["FulfillmentAPI.Domain.CarrierEvent (writer)", "CustomerPortal.Domain.TrackingEvent (RO)"]
+      stage1: [FA-CAP-008, FA-CAP-009, CP-CAP-014, OD-CAP-016]
+
+  - id: OVL-RETURNS
+    capability: PF-CAP-RETURNS
+    relationship: complementary
+    apps: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    rationale: >
+      The three applications perform DIFFERENT, sequential stages of one return process over the shared
+      dbo.Returns row: CustomerPortal creates 'Requested'; OrderDesk reviews to 'Approved'/'Rejected';
+      FulfillmentAPI receives 'Approved' -> 'Received' and restocks. No stage is duplicated; each is a
+      distinct contribution to a common business process -> complementary.
+    verification: behavior_verified
+    evidence:
+      source:
+        - "src/CustomerPortal/CustomerPortal.Application/ReturnService.cs#RequestReturnAsync (ReturnStatus=Requested)"
+        - "src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs#ReviewAsync (approve => Approved else Rejected)"
+        - "database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust (ReturnStatus=Received, only if Approved)"
+      tests:
+        - tests/IntegrationTests/FulfillmentWorkflowTests.cs#Return_receipt_restocks_inventory_and_is_idempotent_and_requires_approval (passed)
+      stage1: [CP-CAP-012, OD-CAP-013, FA-CAP-010]
+
+  - id: DUP-MANDATORY-INFO
+    capability: order-creation customer-info guard
+    relationship: duplicate
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    rationale: >
+      The SAME rule — an order cannot be created unless the customer has a non-empty Email AND
+      ShipAddressLine — is implemented three times (OrderDesk C# helper, the SQL conversion proc, and
+      CustomerPortal checkout). This is a genuine duplicated business validation (identical predicate),
+      not merely similar code. Classified duplicate at the RULE level (see RULE-MANDATORY-INFO).
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CustomerCanOrder
+        - database/procedures/procedures.sql#usp_ConvertQuoteToOrder (THROW 50014)
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (profile email/ship guard)
+      tests:
+        - tests/IntegrationTests/OrderDeskWorkflowTests.cs#Convert_fails_when_customer_missing_mandatory_info (passed)
+      stage1: [OD-RULE-010, CP-RULE-010]
+
+  - id: DUP-AVAIL
+    capability: availability computation (expression-level)
+    relationship: duplicate
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    rationale: >
+      The availability EXPRESSION available = QuantityOnHand - QuantityAllocated is duplicated across
+      all three apps' domain models/queries. This is a duplicated derivation, but the surrounding
+      CAPABILITY is a partial overlap (OVL-INVENTORY) because the uses differ (read check vs recheck vs
+      physical allocation). Documented here as an expression-level duplicate only.
+    verification: static_verified
+    evidence:
+      source:
+        - src/OrderDesk/OrderDesk.Domain/Entities.cs#InventoryItem.QuantityAvailable
+        - src/CustomerPortal/CustomerPortal.Domain/Entities.cs#StockLevel.Available
+        - src/FulfillmentAPI/FulfillmentAPI.Domain/Entities.cs#StockRecord.Available
+      stage1: [OD-RULE-007, CP-RULE-005, FA-RULE-001]
+
+  - id: UNQ-QUOTING
+    capability: PF-CAP-QUOTING
+    relationship: unique
+    apps: [APP-ORDERDESK]
+    rationale: Sales quotations, discount approval, quote-to-order conversion, and commission are implemented only in OrderDesk.
+    verification: static_verified
+    evidence: { source: [src/OrderDesk/OrderDesk.Application/QuoteService.cs], stage1: [OD-CAP-005, OD-CAP-009] }
+
+  - id: UNQ-SALESOPS
+    capability: PF-CAP-SALESOPS
+    relationship: unique
+    apps: [APP-ORDERDESK]
+    rationale: Sales-agent tasks and commission display exist only in OrderDesk.
+    verification: static_verified
+    evidence: { source: [src/OrderDesk/OrderDesk.Application/AgentTaskService.cs], stage1: [OD-CAP-014, OD-CAP-015] }
+
+  - id: UNQ-SHOPPING
+    capability: PF-CAP-SHOPPING
+    relationship: unique
+    apps: [APP-PORTAL]
+    rationale: Shopping cart, coupon application/redemption, and wishlist exist only in CustomerPortal.
+    verification: static_verified
+    evidence: { source: [src/CustomerPortal/CustomerPortal.Application/CartService.cs, src/CustomerPortal/CustomerPortal.Application/WishlistService.cs], stage1: [CP-CAP-006, CP-CAP-007, CP-CAP-018] }
+
+  - id: UNQ-SUPPORT
+    capability: PF-CAP-SUPPORT
+    relationship: unique
+    apps: [APP-PORTAL]
+    rationale: Support ticket lifecycle exists only in CustomerPortal.
+    verification: static_verified
+    evidence: { source: [src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs], stage1: [CP-CAP-015] }
+
+  - id: UNQ-FULFILL
+    capability: PF-CAP-FULFILL
+    relationship: unique
+    apps: [APP-FULFILL]
+    rationale: Warehouse allocation, picking, packaging, and dispatch exist only in FulfillmentAPI.
+    verification: behavior_verified
+    evidence:
+      source: [src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs, src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs]
+      tests: [tests/IntegrationTests/FulfillmentWorkflowTests.cs#Full_warehouse_flow_allocate_pick_package_dispatch]
+      stage1: [FA-CAP-004, FA-CAP-006, FA-CAP-007]
+
+  - id: UNQ-REPORTING
+    capability: PF-CAP-REPORTING
+    relationship: unique
+    apps: [APP-FULFILL]
+    rationale: The warehouse activity summary endpoint/report exists only in FulfillmentAPI (its SQL join is cross-domain; see cross-app-dependencies DEP-REPORT-JOIN).
+    verification: static_verified
+    evidence: { source: [database/procedures/procedures.sql#usp_WarehouseActivitySummary], stage1: [FA-CAP-013] }
+
+  - id: SHARED-IDEMPOTENCY
+    capability: idempotency protections
+    relationship: complementary
+    apps: [APP-PORTAL, APP-FULFILL]
+    rationale: >
+      Both apps implement idempotency but for different operations with different mechanisms:
+      CustomerPortal checkout dedupes on Orders.IdempotencyKey (filtered unique index); FulfillmentAPI
+      dedupes carrier events on (ShipmentId,EventCode,EventUtc) and return receipts on ReturnId. These
+      are distinct safeguards for distinct operations — not a duplicated capability.
+    verification: behavior_verified
+    evidence:
+      source:
+        - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs ; database/schema/01_schema.sql#UQ_Orders_Idempotency
+        - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs#RecordCarrierEventAsync ; database/schema/04_fulfillment.sql#UQ_CarrierEvents
+        - database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust ; database/schema/04_fulfillment.sql#UQ_ReturnReceipts_Return
+      tests:
+        - tests/IntegrationTests/CustomerPortalWorkflowTests.cs#Checkout_creates_order_and_is_idempotent (passed)
+        - tests/IntegrationTests/FulfillmentWorkflowTests.cs#Carrier_events_are_idempotent (passed)
+      stage1: [CP-RULE-009, FA-RULE-018, FA-RULE-021]

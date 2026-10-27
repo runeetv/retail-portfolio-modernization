@@ -1,0 +1,74 @@
+# Evidence Validation — Stage 3 (Step 8)
+# classification: valid | partially_supporting | invalid | missing | not_checked
+# Sampling strategy: stratified — at least one reference per application and per artifact type
+# (capability, rule, dependency, workflow), plus all five stored procedures and all SQL THROW codes
+# cited anywhere in the predictions. Uninspected references are reported not_checked, never valid.
+version: 1
+sampling_strategy:
+  method: stratified_by_app_and_artifact_type
+  guaranteed_coverage:
+    - all 5 stored procedures referenced by predictions
+    - all SQL THROW codes cited (50014, 50021, 50022, 50031)
+    - "at least 1 C# domain-rule symbol per application"
+    - file existence for the most-cited source files
+  total_references_in_predictions_approx: 180
+  sampled: 22
+  sampling_note: Sample is illustrative, not exhaustive; unsampled references are not_checked.
+
+file_existence_checks:
+  - { ref: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs, result: valid }
+  - { ref: src/OrderDesk/OrderDesk.Application/QuoteService.cs, result: valid }
+  - { ref: src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs, result: valid }
+  - { ref: database/procedures/procedures.sql, result: valid }
+
+sql_symbol_checks:
+  - { ref: "procedures.sql#usp_ConvertQuoteToOrder", result: valid, note: "exists; converts approved/non-expired quote in tx" }
+  - { ref: "procedures.sql#usp_ConvertQuoteToOrder THROW 50014", result: valid, note: "mandatory contact/shipping info guard present exactly" }
+  - { ref: "procedures.sql#usp_EvaluateCancellationEligibility", result: valid, note: "comment confirms Pending/Confirmed/Allocated permissive staff rule" }
+  - { ref: "procedures.sql#usp_AllocateInventory THROW 50021", result: valid, note: "cancelled-order block present" }
+  - { ref: "procedures.sql#usp_AllocateInventory THROW 50022", result: valid, note: "insufficient-inventory block present" }
+  - { ref: "procedures.sql#usp_ReceiveReturnAndAdjust THROW 50031", result: valid, note: "approved-only receipt present; comment confirms no refund + idempotent" }
+  - { ref: "procedures.sql#usp_WarehouseActivitySummary", result: valid, note: "header comment confirms cross-domain join Orders+Customers(shared)+SalesAgents(OrderDesk)" }
+
+csharp_symbol_checks:
+  - { ref: "OrderDeskRules.cs#RequiresDiscountApproval", result: valid, note: "discountPercent > DiscountApprovalThresholdPercent (15)" }
+  - { ref: "QuoteService.cs#ApplyDiscountAsync uses RequiresDiscountApproval", result: valid }
+  - { ref: "FulfillmentRules.cs#CanDispatch", result: valid, note: "requires hasPackage && carrier && trackingNumber" }
+  - { ref: "FulfillmentRules.cs#IsValidShipmentTransition", result: valid, note: "transition graph present (Created->Packed ...)" }
+  - { ref: "ShipmentService.cs#UpdateStatusAsync uses CanDispatch + IsValidShipmentTransition", result: valid }
+  - { ref: "PortalRules.cs#CustomerCanCancel", result: valid, note: "returns status is 'Pending' or 'Confirmed' — confirms bounded divergence (excludes Allocated)" }
+  - { ref: "PortalRules.cs#CanRequestReturn", result: valid, note: "Delivered && within ReturnWindowDays (30)" }
+  - { ref: "PortalRules.cs#EvaluateCoupon", result: valid, note: "active/expiry/min/status/redemption checks present" }
+  - { ref: "OrderHistoryService.cs#RequestCancellationAsync", result: valid, note: "comment explicitly contrasts stricter C# rule vs OrderDesk SQL allowing Allocated" }
+  - { ref: "ReturnService.cs#RequestReturnAsync uses CanRequestReturn", result: valid }
+  - { ref: "CheckoutService.cs#CheckoutAsync uses EvaluateCoupon", result: valid }
+
+minor_issues:
+  - ref: "cross-app-workflows.yaml XWF-D step1 stage1: [OD-CAP-011, CP-CAP-011]"
+    result: partially_supporting
+    note: >
+      OD-CAP-011 is "view order details", not cancellation; the correct cancel capability is OD-CAP-012.
+      The cited OrderService.cs#CancelOrderAsync IS correct, but the Stage 1 ID cross-reference is off by one.
+      Traceability slip, not a wrong business claim.
+  - ref: "business-rule-comparison.yaml RULE-IDEMPOTENCY stage1: [FA-RULE-018, FA-RULE-019]"
+    result: partially_supporting
+    note: >
+      Return-receipt idempotency is FA-RULE-021 (not FA-RULE-019, which is 'only approved returns may be
+      received'). The prose is correct; the Stage 1 ID reference is slightly off.
+  - ref: "capability-overlaps.yaml SHARED-IDEMPOTENCY stage1: [CP-RULE-009, FA-RULE-018, FA-RULE-021]"
+    result: valid
+    note: This instance uses the correct FA-RULE-021 for receipt idempotency.
+
+coverage:
+  checked: 22
+  valid: 20
+  partially_supporting: 2
+  invalid: 0
+  missing: 0
+  not_checked: "~158 remaining references (reported as not_checked)"
+evidence_quality_conclusion: >
+  Evidence is of high quality. Every sampled source file exists; every cited SQL stored procedure and
+  every THROW code resolves to the exact construct claimed; sampled C# domain symbols exist and implement
+  the asserted predicate (notably CustomerCanCancel confirms the bounded cancellation divergence). The only
+  defects found are two off-by-one Stage 1 ID cross-references inside Stage 2 files (traceability slips),
+  classified partially_supporting. No fabricated evidence detected in the sample.

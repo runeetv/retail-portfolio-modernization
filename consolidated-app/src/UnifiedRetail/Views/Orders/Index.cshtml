@@ -1,0 +1,25 @@
+@model List<CustomerPortal.Domain.CustomerOrder>
+@{
+    ViewData["Title"] = "My orders";
+}
+<h1>My orders</h1>
+@if (Model.Count == 0) { <p>No orders yet.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Order</th><th>Status</th><th>Source</th><th>Total</th><th>Placed</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var o in Model)
+        {
+            <tr>
+                <td>@o.OrderNumber</td>
+                <td>@o.OrderStatus</td>
+                <td>@o.OrderSource</td>
+                <td>@o.GrandTotal.ToString("C")</td>
+                <td>@o.PlacedUtc.ToString("yyyy-MM-dd")</td>
+                <td><a asp-action="Details" asp-route-id="@o.OrderId">View</a></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

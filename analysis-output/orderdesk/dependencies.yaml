@@ -1,0 +1,192 @@
+# OrderDesk — Dependency Analysis (code, database, external)
+version: 1
+application: OrderDesk
+
+runtime:
+  entry_project: src/OrderDesk/OrderDesk.Desktop (OutputType=WinExe, net10.0-windows, UseWPF=true)
+  entry_point: App.xaml (StartupUri=Views/MainWindow.xaml); MainWindow.DataContext = MainViewModel
+  composition_root: src/OrderDesk/OrderDesk.Desktop/AppServices.cs (hand-rolled singleton DI; no IoC container)
+  db_access_tech: EF Core (Microsoft.EntityFrameworkCore.SqlServer) + raw ADO via Microsoft.Data.SqlClient (6.1.7) for stored procedures
+  connection: LegacyRetail.Common.DbConnectionConfig.Resolve — env var LEGACYRETAIL_CONNECTION else LocalDB default (Server=(localdb)\\MSSQLLocalDB;Database=LegacyRetailDB)
+  resilience: DbContext configured with EnableRetryOnFailure; transactional writes wrapped in Database.CreateExecutionStrategy
+  auth: none observed (internal desktop tool); acting agent id is a UI input (OrdersViewModel.ActingAgentId default 1)
+
+project_dependencies:
+  - OrderDesk.Desktop -> OrderDesk.Application, OrderDesk.Domain, OrderDesk.Infrastructure
+  - OrderDesk.Application -> OrderDesk.Domain, OrderDesk.Infrastructure
+  - OrderDesk.Infrastructure -> OrderDesk.Domain, Shared/LegacyRetail.Common
+  - OrderDesk.Domain -> (none)
+
+nuget_packages:
+  - Microsoft.EntityFrameworkCore.SqlServer (version via $(EfCoreVersion))
+  - Microsoft.EntityFrameworkCore.Relational (Application)
+  - Microsoft.Data.SqlClient 6.1.7 (Application)
+  - System.Security.Cryptography.Pkcs 9.0.22 (transitive pin)
+
+shared_code_dependencies:
+  - LegacyRetail.Common.DbConnectionConfig: connection-string resolution only (no business logic)
+  # Note: LegacyRetail.Common also exposes PasswordHasher, but OrderDesk does not reference it.
+
+database_access:
+  # access: R=read, W=write, X=execute; owner: self-owned logical tables vs shared/external
+  - object: dbo.Customers
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: Customer (OD-ENT-001)
+    purpose: Search/display customers; update contact info; FK target for quotes/orders/tasks.
+    evidence: OrderDeskDbContext(Customer); CustomerService
+  - object: dbo.Products
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: Product (OD-ENT-002)
+    purpose: Catalog browse; unit price source for quote/order lines.
+    evidence: OrderDeskDbContext(Product); CatalogService; QuoteService.AddLineAsync
+  - object: dbo.ProductCategories
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: ProductCategory (OD-ENT-003)
+    purpose: Category labels for catalog display.
+    evidence: OrderDeskDbContext(ProductCategory); CatalogService.BrowseAsync (Include Category)
+  - object: dbo.Inventory
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: InventoryItem (OD-ENT-004)
+    purpose: Availability checks (OnHand - Allocated) for display and pre-order validation.
+    evidence: CatalogService; OrderService.CreateStaffOrderAsync
+  - object: dbo.Orders
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: Order (OD-ENT-011)
+    purpose: Create staff orders; list/view; cancel (status update). Also written by usp_ConvertQuoteToOrder.
+    evidence: OrderService; usp_ConvertQuoteToOrder
+  - object: dbo.OrderLines
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: OrderLine (OD-ENT-012)
+    purpose: Order line items (created with staff order or by conversion proc).
+    evidence: OrderService.CreateStaffOrderAsync; usp_ConvertQuoteToOrder
+  - object: dbo.Returns
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: ReturnRequest (OD-ENT-014)
+    purpose: List returns; approve/reject 'Requested' returns.
+    evidence: ReturnReviewService
+  - object: dbo.SalesAgents
+    type: table
+    access: [R]
+    owner: orderdesk (logical)
+    app_entity: SalesAgent (OD-ENT-005)
+    purpose: Agent lookup for quotes/orders/tasks/commissions; CanOverrideCancellation + CommissionRate inputs to rules.
+    evidence: OrderDeskDbContext(SalesAgent); AgentTaskService; OrderService; QuoteService
+  - object: dbo.SalesQuotes
+    type: table
+    access: [R, W]
+    owner: orderdesk (logical)
+    app_entity: SalesQuote (OD-ENT-006)
+    purpose: Create/update quotes and status transitions; marked Converted by proc.
+    evidence: QuoteService; usp_ConvertQuoteToOrder
+  - object: dbo.SalesQuoteLines
+    type: table
+    access: [R, W]
+    owner: orderdesk (logical)
+    app_entity: SalesQuoteLine (OD-ENT-007)
+    purpose: Quote line items.
+    evidence: QuoteService.AddLineAsync
+  - object: dbo.DiscountApprovals
+    type: table
+    access: [R, W]
+    owner: orderdesk (logical)
+    app_entity: DiscountApproval (OD-ENT-008)
+    purpose: Create/decide discount approvals for high-discount quotes.
+    evidence: QuoteService.ApplyDiscountAsync/DecideDiscountAsync/ListPendingApprovalsAsync
+  - object: dbo.SalesCommissions
+    type: table
+    access: [R]
+    owner: orderdesk (logical)
+    app_entity: SalesCommission (OD-ENT-009)
+    purpose: Display agent commissions. Rows are inserted by usp_ConvertQuoteToOrder (write happens in SQL).
+    evidence: AgentTaskService.ListCommissionsAsync; usp_ConvertQuoteToOrder
+  - object: dbo.SalesAgentTasks
+    type: table
+    access: [R, W]
+    owner: orderdesk (logical)
+    app_entity: SalesAgentTask (OD-ENT-010)
+    purpose: List agent tasks; update task status. (No creation path in OrderDesk code.)
+    evidence: AgentTaskService
+  - object: dbo.CancellationOverrides
+    type: table
+    access: [W]  # inserted only; read-back observed only via test, not app code
+    owner: orderdesk (logical)
+    app_entity: CancellationOverride (OD-ENT-013)
+    purpose: Audit trail for authorized override cancellations.
+    evidence: OrderService.CancelOrderAsync
+  - object: dbo.Shipments
+    type: table
+    access: [R]
+    owner: external
+    app_entity: ShipmentStatusView (OD-ENT-015)
+    purpose: Read-only shipment status/tracking for customer-service lookups.
+    evidence: OrderService.GetShipmentsAsync; OrderDeskDbContext(ShipmentStatusView)
+    external_dependency: EXT-SHIPMENTS
+  - object: dbo.usp_ConvertQuoteToOrder
+    type: stored_procedure
+    access: [X]
+    owner: orderdesk (logical)
+    purpose: Transactional quote->order conversion; enforces approval/expiry/convert-once/mandatory-info; records commission.
+    writes: [Orders, OrderLines, SalesQuotes, SalesCommissions]
+    reads: [SalesQuotes, SalesQuoteLines, Customers, SalesAgents]
+    evidence: QuoteService.ConvertToOrderAsync; database/procedures/procedures.sql
+  - object: dbo.usp_EvaluateCancellationEligibility
+    type: stored_procedure
+    access: [X]
+    owner: orderdesk (logical)
+    purpose: Returns staff cancellation eligibility (IsEligible + Reason) for an order.
+    reads: [Orders]
+    evidence: OrderService.EvaluateEligibilityAsync; database/procedures/procedures.sql
+
+external_dependencies:
+  - id: EXT-SHIPMENTS
+    object: dbo.Shipments
+    nature: OrderDesk reads shipment rows but never writes them; the table is not defined in the
+            schema files OrderDesk's tables live in (database/schema/01_schema.sql, 02_orderdesk.sql).
+            An external application owns/populates it. Functionality of that application is NOT inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-RETURNS-CREATE
+    object: dbo.Returns
+    nature: OrderDesk reviews returns but has no code path that creates a 'Requested' return.
+            Returns originate from an external source. Not inferred further.
+    confidence: medium
+    verification: inferred
+  - id: EXT-RETURNS-RECEIVE
+    object: dbo.Returns
+    nature: The Returns status set includes 'Received'/'Closed', which OrderDesk never sets.
+            These transitions are driven by an external actor. Not inferred further.
+    confidence: medium
+    verification: inferred
+  - id: EXT-ORDERS-OTHER-SOURCE
+    object: dbo.Orders
+    nature: Orders.OrderSource allows 'CustomerPortal' (CK_Orders_Source) and later lifecycle statuses
+            (Allocated/Picking/Packed/Shipped/Delivered). OrderDesk only creates Confirmed/OrderDesk orders
+            and cancels. Other sources/transitions are external. Not inferred further.
+    confidence: high
+    verification: static_verified
+  - id: EXT-SALESAGENTTASK-CREATE
+    object: dbo.SalesAgentTasks
+    nature: OrderDesk reads tasks and updates status but has no observed creation path; tasks may be
+            created externally or by an unobserved mechanism.
+    confidence: medium
+    verification: inferred
+
+shared_physical_tables_note: >
+  dbo.Customers, dbo.Products, dbo.ProductCategories, dbo.Orders, dbo.OrderLines, dbo.Inventory,
+  dbo.Returns are declared in database/schema/01_schema.sql with a comment that the database is a
+  single schema shared by multiple applications. OrderDesk defines its own entity shapes over them.
+  This analysis does not infer the behavior of the other applications sharing these tables.

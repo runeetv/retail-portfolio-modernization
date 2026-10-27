@@ -1,0 +1,4 @@
+gt_tier,predicted_partial_overlap,predicted_complementary,row_total
+broadly-shared,2,0,2
+partial-overlap,3,1,4
+col_total,5,1,6

@@ -1,0 +1,84 @@
+# Adjudication Queue — ambiguous / disputed classifications requiring human review.
+# These were NOT silently resolved; each records the competing interpretations and the
+# provisional scoring decision taken so the headline numbers are reproducible.
+version: 1
+
+items:
+  - id: ADJ-1
+    topic: Overlap taxonomy mismatch (broadly-shared vs partial_overlap)
+    scenarios: [SCN-1-CUSTOMER, SCN-6-SHIPMENT]
+    dispute: >
+      Ground truth classes these 'broadly-shared'. The prediction taxonomy has no 'broadly-shared'
+      tier and labels both 'partial_overlap' (SCN-6 even notes "bordering shared_data_only"). Is this a
+      genuine classification error or an artifact of incompatible taxonomies?
+    competing_views:
+      - "Error: the prediction failed to convey that these are read-sharing of a single source of truth, not functional partial overlap."
+      - "Taxonomy artifact: 'shared_data_only' (which the prediction has) is the closer tier and maps to 'broadly-shared'; the model chose partial_overlap instead."
+    provisional_decision: Scored as classification MISS (2/6). Discovery credited.
+    reviewer_action_needed: Confirm whether 'shared_data_only' should have been the predicted tier; if so, impact is purely classification, not discovery.
+    severity: medium
+
+  - id: ADJ-2
+    topic: Returns lifecycle — complementary vs partial-overlap
+    scenarios: [SCN-5-RETURNS]
+    dispute: >
+      GT classes returns 'partial-overlap'; prediction classes it 'complementary'. Both descriptions
+      agree on the facts (three apps each own a distinct, non-duplicated lifecycle stage).
+    competing_views:
+      - "Match: 'complementary' is a legitimate refinement of 'partial-overlap' for a staged process; per the taxonomy map it is accepted."
+      - "Mismatch: GT's fixed vocabulary should be honored verbatim; 'complementary' is not GT's label."
+    provisional_decision: Scored as ACCEPTED classification (counts toward classification hits).
+    reviewer_action_needed: Decide whether refinements of a GT class count as hits or misses portfolio-wide.
+    severity: low
+
+  - id: ADJ-3
+    topic: PF-CAP-ORDER-VIEW as a shared capability
+    dispute: >
+      Prediction elevates order lookup/history to a shared capability + overlap. GT does not list it.
+      Over-segmentation or a legitimate additional observation?
+    competing_views:
+      - "False positive: not in GT; inflates the shared-capability set."
+      - "Legitimate: all three apps really do read Orders with different scopes; documenting it is not wrong."
+    provisional_decision: Counted as 1 capability FP + 1 overlap FP (low severity).
+    reviewer_action_needed: Confirm whether evaluator should penalize real-but-unlisted shared read patterns.
+    severity: low
+
+  - id: ADJ-4
+    topic: Rule denominator granularity (compound GT rule)
+    dispute: >
+      GT RULE-RETURN-RECEIPT-NO-REFUND is one compound rule (approved-only + restock + no-refund +
+      idempotent) matched by three Stage 1 rules (FA-RULE-019/020/021). Counted as a single exact match.
+    competing_views:
+      - "Correct: scoring unit is the GT rule; one GT rule = one TP regardless of how many predicted rules cover it."
+      - "Alternative: could credit finer predicted granularity, but that risks double counting."
+    provisional_decision: Single exact TP (no double count). Consistent with the unit-of-evaluation policy.
+    reviewer_action_needed: None unless the granularity policy is revised.
+    severity: none
+
+  - id: ADJ-5
+    topic: Evidence ID off-by-one slips
+    refs:
+      - "cross-app-workflows.yaml XWF-D step1 cites OD-CAP-011 (view) instead of OD-CAP-012 (cancel)"
+      - "business-rule-comparison.yaml RULE-IDEMPOTENCY cites FA-RULE-019 instead of FA-RULE-021"
+    dispute: Do traceability slips in cross-reference IDs count against evidence validity or only against polish?
+    provisional_decision: Classified 'partially_supporting' (prose + source path correct; Stage 1 ID wrong).
+    reviewer_action_needed: Confirm whether cross-reference accuracy is in scope for evidence scoring.
+    severity: low
+
+  - id: ADJ-6
+    topic: WF-D participant superset
+    dispute: >
+      Prediction's XWF-D includes OrderDesk staff-cancel origin in addition to GT's customer path.
+      Superset (extra correct info) vs participant-set mismatch.
+    provisional_decision: Scored partial (participants not an exact set match).
+    reviewer_action_needed: Decide whether a correct superset should score exact or partial.
+    severity: low
+
+summary:
+  total_open_items: 6
+  material_to_headline_score: [ADJ-1, ADJ-2, ADJ-3]
+  note: >
+    Headline weighted score (95.5%) is reproducible under the provisional decisions above. The main
+    sensitivity is ADJ-1/ADJ-2 (overlap classification): treating the taxonomy differences as full
+    matches would raise the overlap category from 0.83 toward ~0.95; treating ADJ-2 as a miss would
+    lower it further. These are flagged for human adjudication rather than resolved by guesswork.

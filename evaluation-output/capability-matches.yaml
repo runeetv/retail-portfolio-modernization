@@ -1,0 +1,279 @@
+# Capability Matches — Stage 3 evaluation
+# Each record maps a ground-truth capability (GT) to the predicted capability(ies).
+# classification: exact | partial | incorrect | unmatched_prediction | unmatched_ground_truth | ambiguous
+# relation: 1-1 | merge (many predicted -> 1 GT) | split (1 predicted -> many GT)
+# scoring unit = one ground-truth capability (counted once).
+version: 1
+evaluation_unit: ground_truth_capability
+ground_truth_file: benchmark/ground-truth/business-capabilities.yaml
+primary_prediction_file: analysis-output/portfolio/portfolio-capabilities.yaml
+stage1_provenance: true
+
+matches:
+  # ===================== OrderDesk app-specific (7) =====================
+  - gt: CAP-OD-QUOTE-CREATE
+    predicted: [PF-CAP-QUOTING]
+    stage1: [OD-CAP-005]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Stage 2 PF-CAP-QUOTING consolidates the full quote lifecycle; Stage 1 OD-CAP-005 is the dedicated create-quote capability. Business meaning identical.
+
+  - gt: CAP-OD-QUOTE-LINES
+    predicted: [PF-CAP-QUOTING]
+    stage1: [OD-CAP-006]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Quote line items covered by OD-CAP-006 and folded into PF-CAP-QUOTING.
+
+  - gt: CAP-OD-DISCOUNT-APPROVAL
+    predicted: [PF-CAP-QUOTING]
+    stage1: [OD-CAP-007, OD-CAP-008]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Apply-discount (OD-CAP-007) + decide-approval (OD-CAP-008) match GT's combined apply+approve discount capability.
+
+  - gt: CAP-OD-QUOTE-CONVERT
+    predicted: [PF-CAP-QUOTING, PF-CAP-ORDER-CREATE]
+    stage1: [OD-CAP-009]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Quote-to-order conversion (OD-CAP-009, usp_ConvertQuoteToOrder) appears in both PF-CAP-QUOTING and PF-CAP-ORDER-CREATE. Counted once.
+
+  - gt: CAP-OD-COMMISSION
+    predicted: [PF-CAP-SALESOPS, PF-CAP-QUOTING]
+    stage1: [OD-CAP-015, OD-CAP-009]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Commission calculation (written by usp_ConvertQuoteToOrder, displayed via OD-CAP-015) captured. PF-CAP-SALESOPS names tasks+commissions.
+
+  - gt: CAP-OD-AGENT-TASKS
+    predicted: [PF-CAP-SALESOPS]
+    stage1: [OD-CAP-014]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Assigned sales-agent tasks = OD-CAP-014, consolidated into PF-CAP-SALESOPS.
+
+  - gt: CAP-OD-CANCEL-OVERRIDE
+    predicted: [PF-CAP-ORDER-CANCEL]
+    stage1: [OD-CAP-012]
+    relation: merge
+    classification: partial
+    confidence: high
+    explanation: >
+      Authorized cancellation override with audit (OD-CAP-012, CancellationOverrides) is discovered
+      and well described (override + audit). Scored partial (not exact) because the Stage 2 catalog
+      folds the override into the broader PF-CAP-ORDER-CANCEL rather than surfacing it as its own
+      app-specific capability the way GT does; the override specificity is preserved in rule RULE-CANCEL
+      and OVL-CANCEL, so discovery is strong but granularity differs.
+
+  # ===================== CustomerPortal app-specific (7) =====================
+  - gt: CAP-CP-AUTH
+    predicted: []
+    stage1: [CP-CAP-001, CP-CAP-002]
+    relation: merge
+    classification: partial
+    confidence: high
+    explanation: >
+      Local authentication (sign-in/out) is fully discovered in Stage 1 (CP-CAP-001/002) but is NOT
+      represented as a standalone capability in the Stage 2 portfolio catalog — it was folded into
+      PF-CAP-CUSTOMER-MANAGE's "local sign-in/out (own identity)" clause rather than kept as an
+      app-specific capability. Stage 2 lost the explicit auth capability. Partial (discovered S1, under-surfaced S2).
+
+  - gt: CAP-CP-CART
+    predicted: [PF-CAP-SHOPPING]
+    stage1: [CP-CAP-006]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Shopping cart add/update/remove = CP-CAP-006, in PF-CAP-SHOPPING.
+
+  - gt: CAP-CP-COUPON
+    predicted: [PF-CAP-SHOPPING]
+    stage1: [CP-CAP-007, CP-CAP-008]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Coupon apply/remove = CP-CAP-007/008, in PF-CAP-SHOPPING.
+
+  - gt: CAP-CP-CHECKOUT
+    predicted: [PF-CAP-ORDER-CREATE]
+    stage1: [CP-CAP-009]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Idempotent checkout = CP-CAP-009, folded into PF-CAP-ORDER-CREATE (CustomerPortal origin).
+
+  - gt: CAP-CP-WISHLIST
+    predicted: [PF-CAP-SHOPPING]
+    stage1: [CP-CAP-018]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Wishlist = CP-CAP-018, in PF-CAP-SHOPPING.
+
+  - gt: CAP-CP-SUPPORT
+    predicted: [PF-CAP-SUPPORT]
+    stage1: [CP-CAP-015, CP-CAP-016, CP-CAP-017]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Support tickets + status transitions = CP-CAP-015/016/017 = PF-CAP-SUPPORT.
+
+  - gt: CAP-CP-RETURN-REQUEST
+    predicted: [PF-CAP-RETURNS]
+    stage1: [CP-CAP-012]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Create return request = CP-CAP-012, the CustomerPortal stage of PF-CAP-RETURNS.
+
+  # ===================== FulfillmentAPI app-specific (6) =====================
+  - gt: CAP-FA-ALLOCATE
+    predicted: [PF-CAP-FULFILL, PF-CAP-INVENTORY-AVAILABILITY]
+    stage1: [FA-CAP-003]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Physical allocation = FA-CAP-003 (usp_AllocateInventory), in PF-CAP-FULFILL.
+
+  - gt: CAP-FA-PICK
+    predicted: [PF-CAP-FULFILL]
+    stage1: [FA-CAP-004, FA-CAP-005]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Pick list creation + item picking = FA-CAP-004/005, in PF-CAP-FULFILL.
+
+  - gt: CAP-FA-PACKAGE
+    predicted: [PF-CAP-FULFILL]
+    stage1: [FA-CAP-006]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Shipment packaging = FA-CAP-006, in PF-CAP-FULFILL.
+
+  - gt: CAP-FA-CARRIER-EVENTS
+    predicted: [PF-CAP-SHIPMENT-TRACK]
+    stage1: [FA-CAP-008]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Idempotent carrier event recording = FA-CAP-008, in PF-CAP-SHIPMENT-TRACK (owner side).
+
+  - gt: CAP-FA-RETURN-RECEIPT
+    predicted: [PF-CAP-RETURNS]
+    stage1: [FA-CAP-010]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Warehouse return receipt + restock = FA-CAP-010 (usp_ReceiveReturnAndAdjust), the FulfillmentAPI stage of PF-CAP-RETURNS.
+
+  - gt: CAP-FA-ACTIVITY-SUMMARY
+    predicted: [PF-CAP-REPORTING]
+    stage1: [FA-CAP-013]
+    relation: merge
+    classification: exact
+    confidence: high
+    explanation: Cross-domain warehouse activity summary = FA-CAP-013 = PF-CAP-REPORTING; cross-domain join also captured as DEP-REPORT-JOIN.
+
+  # ===================== Partial-overlap (4) =====================
+  - gt: CAP-ORDER-CREATE
+    predicted: [PF-CAP-ORDER-CREATE]
+    stage1: [OD-CAP-009, OD-CAP-010, CP-CAP-009]
+    relation: 1-1
+    classification: exact
+    confidence: high
+    explanation: Order creation partial overlap (OD staff/quote + CP checkout, FA none) matches exactly, including the correct partial_overlap classification.
+
+  - gt: CAP-CANCEL
+    predicted: [PF-CAP-ORDER-CANCEL]
+    stage1: [OD-CAP-012, CP-CAP-011]
+    relation: 1-1
+    classification: exact
+    confidence: high
+    explanation: >
+      Cancellation overlap matches, including the bounded Allocated divergence and SQL-vs-C#
+      enforcement difference. FA's "blocks cancelled" is captured as a complementary guard (DEP-CANCEL-GUARD),
+      consistent with GT note.
+
+  - gt: CAP-INVENTORY-CHECK
+    predicted: [PF-CAP-INVENTORY-AVAILABILITY]
+    stage1: [OD-CAP-004, CP-CAP-005, FA-CAP-002, FA-CAP-003]
+    relation: 1-1
+    classification: exact
+    confidence: high
+    explanation: Inventory availability three-app partial overlap (pre-order check / display+recheck / physical allocation) matches exactly; expression duplication also flagged (DUP-AVAIL).
+
+  - gt: CAP-RETURNS-PROCESS
+    predicted: [PF-CAP-RETURNS]
+    stage1: [CP-CAP-012, OD-CAP-013, FA-CAP-010]
+    relation: 1-1
+    classification: partial
+    confidence: high
+    explanation: >
+      Returns lifecycle discovered with correct three-app staging (request/approve/receive). Scored
+      partial on the capability axis because the Stage 2 RELATIONSHIP classification is 'complementary'
+      whereas GT classifies it 'partial-overlap'. Discovery correct; classification differs (tracked in
+      overlap-evaluation OVL-RETURNS + adjudication).
+
+  # ===================== Broadly-shared (3) =====================
+  - gt: CAP-CUSTOMER-MGMT
+    predicted: [PF-CAP-CUSTOMER-MANAGE]
+    stage1: [OD-CAP-001, OD-CAP-002, CP-CAP-003, FA-CAP-013]
+    relation: 1-1
+    classification: partial
+    confidence: high
+    explanation: >
+      Customer management discovered across all three apps with correct per-app scope (OD full edit /
+      CP self-service subset / FA read-only in report). Scored partial because GT classifies it
+      'broadly-shared' while the prediction classifies it 'partial_overlap' — a classification-tier miss
+      (prediction taxonomy has no broadly-shared tier). Capability + apps correct.
+
+  - gt: CAP-PRODUCT-BROWSE
+    predicted: [PF-CAP-CATALOG-BROWSE]
+    stage1: [OD-CAP-003, CP-CAP-004, CP-CAP-005]
+    relation: 1-1
+    classification: partial
+    confidence: high
+    explanation: >
+      Catalog browsing discovered (OD + CP). Scored partial: GT = 'broadly-shared', prediction =
+      'partial_overlap'. Also GT lists apps [OD, PORTAL]; prediction agrees. Classification-tier miss only.
+
+  - gt: CAP-SHIPMENT-VISIBILITY
+    predicted: [PF-CAP-SHIPMENT-TRACK]
+    stage1: [FA-CAP-008, FA-CAP-009, CP-CAP-014, OD-CAP-016]
+    relation: 1-1
+    classification: partial
+    confidence: high
+    explanation: >
+      Shipment visibility discovered with correct ownership (FA owns/writes; CP + OD read-only). Scored
+      partial: GT = 'broadly-shared', prediction = 'partial_overlap' (it even notes "bordering
+      shared_data_only"). Classification-tier miss; discovery + direction correct.
+
+# ===================== Predicted capabilities with no distinct GT capability =====================
+unmatched_predictions:
+  - predicted: PF-CAP-ORDER-VIEW
+    classification: unmatched_prediction
+    severity: low
+    explanation: >
+      Order lookup/history as a distinct SHARED capability has no corresponding ground-truth capability
+      entry (GT folds order viewing into app-specific order management and does not list it as a shared
+      capability or overlap scenario). Not wrong as an observation (all three apps read Orders), but it
+      is an EXTRA consolidated capability not in the GT catalog. Counted as a false positive on the
+      capability axis. Low severity: it reflects a real read pattern, it is not a fabricated business function.
+  - predicted: SHARED-IDEMPOTENCY
+    classification: not_a_capability
+    severity: none
+    explanation: >
+      Listed in capability-overlaps.yaml as a relationship between rules, not a business capability.
+      Excluded from the capability denominator; evaluated under business rules (RULE-IDEMPOTENCY) instead.
+
+notes:
+  - All 27 ground-truth capabilities were matched (20 exact + ... see scorecard). No ground-truth capability is fully undiscovered (no unmatched_ground_truth).
+  - Stage 1 discovered every app-specific capability at finer granularity; Stage 2 merges are correct except for the two under-surfaced items (CAP-CP-AUTH, and the override granularity of CAP-OD-CANCEL-OVERRIDE).

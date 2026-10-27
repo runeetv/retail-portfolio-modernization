@@ -1,0 +1,39 @@
+@model List<CustomerPortal.Domain.CatalogProduct>
+@{
+    ViewData["Title"] = "Catalog";
+    var categories = ViewBag.Categories as List<CustomerPortal.Domain.Category> ?? new();
+}
+<h1>Catalog</h1>
+<form method="get" class="card">
+    <input name="term" value="@ViewBag.Term" placeholder="Search name or SKU" />
+    <select name="categoryId">
+        <option value="">All categories</option>
+        @foreach (var c in categories)
+        {
+            <option value="@c.CategoryId" selected="@(ViewBag.CategoryId?.ToString() == c.CategoryId.ToString())">@c.Name</option>
+        }
+    </select>
+    <button class="btn" type="submit">Search</button>
+</form>
+<table>
+    <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var p in Model)
+    {
+        <tr>
+            <td>@p.Sku</td>
+            <td><a asp-action="Details" asp-route-id="@p.ProductId">@p.Name</a></td>
+            <td>@p.Category?.Name</td>
+            <td>@p.UnitPrice.ToString("C")</td>
+            <td>
+                <form class="inline" method="post" asp-controller="Cart" asp-action="Add">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="productId" value="@p.ProductId" />
+                    <input type="hidden" name="quantity" value="1" />
+                    <button class="btn" type="submit">Add to cart</button>
+                </form>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>

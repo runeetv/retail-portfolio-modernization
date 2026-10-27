@@ -1,0 +1,428 @@
+# CustomerPortal — Business Capability Catalog (reverse-engineered from implementation)
+# Confidence: high | medium | low
+# Verification: static_verified | behavior_verified | inferred
+version: 1
+application: CustomerPortal
+
+domains:
+  - id: CP-DOM-IDENTITY
+    name: Account & Identity (local auth)
+    capabilities: [CP-CAP-001, CP-CAP-002]
+  - id: CP-DOM-PROFILE
+    name: Self-Service Profile
+    capabilities: [CP-CAP-003]
+  - id: CP-DOM-CATALOG
+    name: Catalog Browsing & Availability
+    capabilities: [CP-CAP-004, CP-CAP-005]
+  - id: CP-DOM-CART
+    name: Shopping Cart & Coupons
+    capabilities: [CP-CAP-006, CP-CAP-007, CP-CAP-008]
+  - id: CP-DOM-CHECKOUT
+    name: Checkout & Order Placement
+    capabilities: [CP-CAP-009]
+  - id: CP-DOM-ORDERS
+    name: Order History & Cancellation
+    capabilities: [CP-CAP-010, CP-CAP-011]
+  - id: CP-DOM-RETURNS
+    name: Returns (customer-initiated)
+    capabilities: [CP-CAP-012, CP-CAP-013]
+  - id: CP-DOM-TRACKING
+    name: Shipment Tracking (read-only)
+    capabilities: [CP-CAP-014]
+  - id: CP-DOM-SUPPORT
+    name: Support Tickets
+    capabilities: [CP-CAP-015, CP-CAP-016, CP-CAP-017]
+  - id: CP-DOM-WISHLIST
+    name: Wishlist
+    capabilities: [CP-CAP-018]
+
+capabilities:
+  - id: CP-CAP-001
+    domain: CP-DOM-IDENTITY
+    name: Customer sign-in (local authentication)
+    description: >
+      Authenticate a shopper by username + password (PBKDF2 verify), reject locked
+      accounts, update LastLoginUtc, and establish a cookie session carrying CustomerId,
+      CustomerAccountId, Username, and CustomerStatus claims.
+    actor: Customer (anonymous -> authenticated)
+    entry_point: GET/POST /Account/Login
+    preconditions: [valid CustomerAccount exists, account not locked]
+    inputs: [username, password]
+    outputs: [authenticated cookie principal, or validation error]
+    entities: [CP-ENT-001, CP-ENT-002]
+    rules: [CP-RULE-001, CP-RULE-002]
+    db_access:
+      read: [CustomerAccounts, Customers]
+      write: [CustomerAccounts]   # LastLoginUtc
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/AuthService.cs:SignInAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/AccountController.cs:Login
+      - src/CustomerPortal/CustomerPortal.Web/CurrentUser.cs
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-002
+    domain: CP-DOM-IDENTITY
+    name: Sign out
+    description: Clear the authentication cookie and return to the landing page.
+    actor: Customer
+    entry_point: POST /Account/Logout
+    preconditions: [authenticated]
+    inputs: []
+    outputs: [cleared session]
+    entities: []
+    rules: []
+    db_access: {read: [], write: []}
+    evidence: src/CustomerPortal/CustomerPortal.Web/Controllers/AccountController.cs:Logout
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-003
+    domain: CP-DOM-PROFILE
+    name: View & update own profile (self-service subset)
+    description: >
+      View the shopper's profile and update ONLY contact + shipping fields (phone,
+      address, city, region, postal, country). Name, email, and CustomerStatus are NOT
+      editable here.
+    actor: Authenticated customer
+    entry_point: GET/POST /Profile/Index
+    preconditions: [authenticated; profile exists]
+    inputs: [phone, shipping address fields]
+    outputs: [updated ShopperProfile]
+    entities: [CP-ENT-003]
+    rules: [CP-RULE-003]
+    db_access:
+      read: [Customers]
+      write: [Customers]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/ProfileService.cs:UpdateSelfServiceAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/ProfileController.cs
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-004
+    domain: CP-DOM-CATALOG
+    name: Browse / search products (anonymous allowed)
+    description: >
+      Browse active (non-discontinued) products, optionally filtered by search term
+      (name or SKU) and/or category (capped 200). Does not require authentication.
+    actor: Anyone (anonymous or authenticated)
+    entry_point: GET /Catalog/Index
+    preconditions: []
+    inputs: [term(optional), categoryId(optional)]
+    outputs: [products + per-product availability + categories]
+    entities: [CP-ENT-004, CP-ENT-005, CP-ENT-006]
+    rules: [CP-RULE-004]
+    db_access:
+      read: [Products, ProductCategories, Inventory]
+      write: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs:SearchAsync/GetCategoriesAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/CatalogController.cs:Index
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-005
+    domain: CP-DOM-CATALOG
+    name: View product details + displayed availability
+    description: >
+      View a single product with its displayed available quantity
+      (QuantityOnHand - QuantityAllocated). Availability here is informational only;
+      it is re-checked authoritatively at checkout.
+    actor: Anyone
+    entry_point: GET /Catalog/Details/{id}
+    preconditions: []
+    inputs: [productId]
+    outputs: [product + available quantity]
+    entities: [CP-ENT-004, CP-ENT-006]
+    rules: [CP-RULE-005]
+    db_access:
+      read: [Products, ProductCategories, Inventory]
+      write: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs:GetAsync/DisplayAvailabilityAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/CatalogController.cs:Details
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-006
+    domain: CP-DOM-CART
+    name: Manage shopping cart (add / update / remove)
+    description: >
+      Add products to the active cart (merging quantity when already present), change a
+      line's quantity (quantity <= 0 removes it), or remove a line. One active cart per
+      account is created on demand. Carts may hold items that later become unavailable.
+    actor: Authenticated customer
+    entry_point: POST /Cart/Add, /Cart/Update, /Cart/Remove; GET /Cart/Index
+    preconditions: [authenticated; product exists]
+    inputs: [productId, quantity]
+    outputs: [updated cart]
+    entities: [CP-ENT-007, CP-ENT-008]
+    rules: [CP-RULE-006, CP-RULE-007]
+    db_access:
+      read: [ShoppingCarts, ShoppingCartItems, Products]
+      write: [ShoppingCarts, ShoppingCartItems]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CartService.cs (AddItemAsync/UpdateQuantityAsync/RemoveItemAsync/GetOrCreateActiveCartAsync)
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/CartController.cs
+    confidence: high
+    verification: behavior_verified   # exercised by CustomerPortalWorkflowTests (cart used in checkout tests)
+
+  - id: CP-CAP-007
+    domain: CP-DOM-CART
+    name: Apply promotional coupon
+    description: >
+      Apply a coupon code to the active cart after validating eligibility (active, not
+      expired, cart meets minimum, required customer status, redemption cap). Only the
+      code is stored on the cart; the monetary discount is computed at checkout.
+    actor: Authenticated customer
+    entry_point: POST /Cart/ApplyCoupon
+    preconditions: [authenticated; coupon exists and is eligible]
+    inputs: [coupon code]
+    outputs: [coupon code stored on cart, or rejection reason]
+    entities: [CP-ENT-007, CP-ENT-011]
+    rules: [CP-RULE-008]
+    db_access:
+      read: [ShoppingCarts, ShoppingCartItems, Products, Coupons, CouponRedemptions]
+      write: [ShoppingCarts]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CartService.cs:ApplyCouponAsync
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:EvaluateCoupon
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Coupon_applied_reduces_order_total_and_records_redemption
+
+  - id: CP-CAP-008
+    domain: CP-DOM-CART
+    name: Remove applied coupon
+    description: Clear the coupon code from the active cart.
+    actor: Authenticated customer
+    entry_point: POST /Cart/RemoveCoupon
+    preconditions: [authenticated]
+    inputs: []
+    outputs: [cart with no coupon]
+    entities: [CP-ENT-007]
+    rules: []
+    db_access: {read: [ShoppingCarts], write: [ShoppingCarts]}
+    evidence: src/CustomerPortal/CustomerPortal.Application/CartService.cs:RemoveCouponAsync
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-009
+    domain: CP-DOM-CHECKOUT
+    name: Place order from cart (idempotent checkout)
+    description: >
+      Convert the active cart into a Confirmed order (OrderSource=CustomerPortal).
+      Validates non-empty cart and mandatory profile info, rechecks inventory per line,
+      computes any coupon discount and records a CouponRedemption, marks the cart
+      CheckedOut, all within a transaction. Idempotent on an idempotency key: a repeat
+      with the same key returns the existing order rather than creating a duplicate.
+    actor: Authenticated customer
+    entry_point: GET /Checkout/Index (issues key); POST /Checkout/Place
+    preconditions: [authenticated; active cart with items; profile has email + shipping address; each line available]
+    inputs: [idempotencyKey]
+    outputs: [new OrderId -> redirect to order details, or failure]
+    entities: [CP-ENT-009, CP-ENT-010, CP-ENT-007, CP-ENT-006, CP-ENT-012]
+    rules: [CP-RULE-009, CP-RULE-010, CP-RULE-011, CP-RULE-012, CP-RULE-013]
+    db_access:
+      read: [Orders, ShoppingCarts, ShoppingCartItems, Products, Customers, Inventory, Coupons, CouponRedemptions]
+      write: [Orders, OrderLines, ShoppingCarts, CouponRedemptions]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/CheckoutController.cs
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Checkout_* (idempotent, inventory recheck, coupon)
+
+  - id: CP-CAP-010
+    domain: CP-DOM-ORDERS
+    name: View own order history & detail
+    description: >
+      List the signed-in customer's own orders (capped 100) and view a single order's
+      lines + CanCancel/CanReturn flags + shipment tracking. Ownership is enforced by
+      filtering on the customer's id.
+    actor: Authenticated customer
+    entry_point: GET /Orders/Index, GET /Orders/Details/{id}
+    preconditions: [authenticated; order belongs to the customer]
+    inputs: [orderId]
+    outputs: [own orders / order detail]
+    entities: [CP-ENT-009, CP-ENT-010]
+    rules: [CP-RULE-014]
+    db_access:
+      read: [Orders, OrderLines, Products]
+      write: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:GetOwnOrdersAsync/GetOwnOrderAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/OrdersController.cs:Index/Details
+    confidence: high
+    verification: behavior_verified   # ownership enforcement verified by workflow test
+
+  - id: CP-CAP-011
+    domain: CP-DOM-ORDERS
+    name: Request cancellation of own order
+    description: >
+      Cancel one's own order online. Allowed only while the order is Pending or
+      Confirmed (stricter than later lifecycle states). Enforces ownership and blocks
+      re-cancelling an already-cancelled order.
+    actor: Authenticated customer
+    entry_point: POST /Orders/Cancel/{id}
+    preconditions: [authenticated; order owned; status Pending or Confirmed; not already cancelled]
+    inputs: [orderId, reason(optional)]
+    outputs: [order set Cancelled, or rejection]
+    entities: [CP-ENT-009]
+    rules: [CP-RULE-015, CP-RULE-014, CP-RULE-016]
+    db_access:
+      read: [Orders]
+      write: [Orders]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:RequestCancellationAsync
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CustomerCanCancel
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Customer_cancellation_is_stricter_blocks_allocated / Ownership_enforced
+
+  - id: CP-CAP-012
+    domain: CP-DOM-RETURNS
+    name: Create return request
+    description: >
+      Request a return for a delivered order within the return window (30 days). Copies
+      the order's lines into the return, sets status 'Requested', and prevents a second
+      active return for the same order. Ownership enforced.
+    actor: Authenticated customer
+    entry_point: POST /Orders/RequestReturn/{id}
+    preconditions: [authenticated; order owned; status Delivered; within 30 days; no existing non-Rejected return]
+    inputs: [orderId, reason(optional)]
+    outputs: [new return (Requested), or rejection]
+    entities: [CP-ENT-013, CP-ENT-014, CP-ENT-009]
+    rules: [CP-RULE-017, CP-RULE-018, CP-RULE-014]
+    db_access:
+      read: [Orders, OrderLines, Returns]
+      write: [Returns, ReturnLines]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs:RequestReturnAsync
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CanRequestReturn
+    confidence: high
+    verification: behavior_verified   # CustomerPortalWorkflowTests.Return_request_only_within_window_for_delivered
+
+  - id: CP-CAP-013
+    domain: CP-DOM-RETURNS
+    name: View own return requests
+    description: List the signed-in customer's return requests, newest first.
+    actor: Authenticated customer
+    entry_point: GET /Returns/Index
+    preconditions: [authenticated]
+    inputs: []
+    outputs: [list of own returns]
+    entities: [CP-ENT-013]
+    rules: [CP-RULE-014]
+    db_access: {read: [Returns], write: []}
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs:GetOwnReturnsAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/ReturnsController.cs
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-014
+    domain: CP-DOM-TRACKING
+    name: View shipment tracking for an order (read-only)
+    description: >
+      Show a customer-friendly view of shipments + carrier events for one of the
+      customer's orders. Verifies the order belongs to the customer before returning
+      any shipment data. Read-only; the shipment/event data is produced externally.
+    actor: Authenticated customer
+    entry_point: GET /Orders/Details/{id} (tracking section)
+    preconditions: [authenticated; order owned]
+    inputs: [orderId]
+    outputs: [shipments + tracking events in a friendly presentation]
+    entities: [CP-ENT-015, CP-ENT-016]
+    rules: [CP-RULE-014]
+    db_access:
+      read: [Shipments, CarrierEvents, Orders]
+      write: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs:GetOrderTrackingAsync/FriendlyStatus
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SHIPMENTS, EXT-CARRIEREVENTS]
+
+  - id: CP-CAP-015
+    domain: CP-DOM-SUPPORT
+    name: Create & view support tickets
+    description: >
+      Open a support ticket (subject required) with an initial customer message and an
+      optional related order, and view one's own tickets and ticket threads. Ownership
+      enforced by account id.
+    actor: Authenticated customer
+    entry_point: GET/POST /Support/Create; GET /Support/Index; GET /Support/Details/{id}
+    preconditions: [authenticated; subject provided]
+    inputs: [subject, body, relatedOrderId(optional)]
+    outputs: [new ticket (Open) + initial message]
+    entities: [CP-ENT-017, CP-ENT-018]
+    rules: [CP-RULE-019, CP-RULE-014]
+    db_access:
+      read: [SupportTickets, SupportTicketMessages]
+      write: [SupportTickets, SupportTicketMessages]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:CreateAsync/GetOwnTicketsAsync/GetOwnTicketAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/SupportController.cs
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-016
+    domain: CP-DOM-SUPPORT
+    name: Reply to a support ticket
+    description: Add a customer message to an own, non-Closed ticket; updates UpdatedUtc.
+    actor: Authenticated customer
+    entry_point: POST /Support/AddMessage/{id}
+    preconditions: [authenticated; ticket owned; ticket not Closed]
+    inputs: [ticketId, body]
+    outputs: [new message appended]
+    entities: [CP-ENT-017, CP-ENT-018]
+    rules: [CP-RULE-020, CP-RULE-014]
+    db_access:
+      read: [SupportTickets]
+      write: [SupportTickets, SupportTicketMessages]
+    evidence: src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:AddMessageAsync
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-017
+    domain: CP-DOM-SUPPORT
+    name: Change support ticket status
+    description: >
+      Transition an own ticket's status following a validated transition graph
+      (e.g. Open->Pending/Resolved, Resolved->Closed/Open).
+    actor: Authenticated customer
+    entry_point: POST /Support/ChangeStatus/{id}
+    preconditions: [authenticated; ticket owned; transition allowed]
+    inputs: [ticketId, newStatus]
+    outputs: [updated ticket status, or rejection]
+    entities: [CP-ENT-017]
+    rules: [CP-RULE-021, CP-RULE-014]
+    db_access:
+      read: [SupportTickets]
+      write: [SupportTickets]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs:ChangeStatusAsync
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:IsValidTicketTransition
+    confidence: high
+    verification: static_verified
+
+  - id: CP-CAP-018
+    domain: CP-DOM-WISHLIST
+    name: Maintain wishlist
+    description: >
+      View, add to, and remove from a per-account wishlist (one wishlist per account,
+      created on demand). Adding a product already present is a no-op (deduped).
+    actor: Authenticated customer
+    entry_point: GET /Wishlist/Index; POST /Wishlist/Add, /Wishlist/Remove
+    preconditions: [authenticated; product exists]
+    inputs: [productId]
+    outputs: [updated wishlist]
+    entities: [CP-ENT-019, CP-ENT-020]
+    rules: [CP-RULE-022]
+    db_access:
+      read: [Wishlists, WishlistItems, Products]
+      write: [Wishlists, WishlistItems]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/WishlistService.cs
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/WishlistController.cs
+    confidence: high
+    verification: static_verified

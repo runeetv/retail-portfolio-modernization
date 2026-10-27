@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CustomerPortal.Infrastructure</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.22" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CustomerPortal.Domain\CustomerPortal.Domain.csproj" />
+    <ProjectReference Include="..\..\Shared\LegacyRetail.Common\LegacyRetail.Common.csproj" />
+  </ItemGroup>
+</Project>

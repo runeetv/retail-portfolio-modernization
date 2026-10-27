@@ -1,0 +1,264 @@
+# FulfillmentAPI — Domain Entity Reconstruction
+# role: aggregate_root | supporting_entity | value_object | read_model | reporting_projection | transport_dto
+# Source namespace: FulfillmentAPI.Domain (Entities.cs). Mappings from FulfillmentDbContext.
+version: 1
+application: FulfillmentAPI
+
+entities:
+  - id: FA-ENT-001
+    name: Warehouse
+    purpose: A physical fulfillment location; the anchor for bins, allocations, pick lists, shipments, and receipts.
+    source_class: FulfillmentAPI.Domain.Warehouse
+    physical_table: dbo.Warehouses
+    role: aggregate_root
+    key_attributes: [WarehouseId (PK), Code (unique), Name, Region, IsActive]
+    relationships: [has WarehouseBins; referenced by allocations/picklists/shipments/receipts]
+    lifecycle: Read-only in this application (reference data; no create/update path observed).
+    crud: [read]
+    ownership: read-only reference (created outside this application)
+    capabilities: [FA-CAP-012, FA-CAP-013]
+    evidence: Entities.cs:Warehouse; FulfillmentDbContext(Warehouse); database/schema/04_fulfillment.sql:Warehouses
+    confidence: high
+
+  - id: FA-ENT-002
+    name: WarehouseBin
+    purpose: A storage location within a warehouse, assigned to pick-list items.
+    source_class: FulfillmentAPI.Domain.WarehouseBin
+    physical_table: dbo.WarehouseBins
+    role: supporting_entity
+    key_attributes: [WarehouseBinId (PK), WarehouseId (FK), BinCode, Aisle]
+    relationships: [belongs to Warehouse; referenced by PickListItem.WarehouseBinId]
+    lifecycle: Read-only (reference data; used for round-robin bin assignment during pick-list creation).
+    crud: [read]
+    ownership: read-only reference
+    capabilities: [FA-CAP-004]
+    evidence: Entities.cs:WarehouseBin; PickingService.CreatePickListAsync (bins)
+    confidence: high
+
+  - id: FA-ENT-003
+    name: FulfillmentOrder
+    purpose: >
+      Warehouse view of a sales order (the class comment notes it maps to the same
+      dbo.Orders row that other applications name differently). Drives the fulfillment
+      lifecycle.
+    source_class: FulfillmentAPI.Domain.FulfillmentOrder
+    physical_table: dbo.Orders
+    role: aggregate_root
+    key_attributes: [OrderId (PK), OrderNumber, CustomerId, OrderStatus, OrderSource, PlacedUtc]
+    aggregates: [FulfillmentOrderLine]
+    relationships: [Lines; referenced by allocations/picklists/shipments]
+    lifecycle: >
+      Created externally. This application READS it and WRITES only OrderStatus, advancing
+      the fulfillment subset Allocated -> Picking -> Packed -> Shipped -> Delivered.
+    crud: [read, update(status only)]
+    ownership: shared physical table; order records produced externally
+    capabilities: [FA-CAP-001, FA-CAP-003, FA-CAP-005, FA-CAP-006, FA-CAP-007]
+    evidence: Entities.cs:FulfillmentOrder; FulfillmentDbContext(FulfillmentOrder -> "Orders"); PickingService; ShipmentService; usp_AllocateInventory
+    confidence: high
+    external_dependencies: [EXT-ORDERS]
+
+  - id: FA-ENT-004
+    name: FulfillmentOrderLine
+    purpose: Warehouse view of an order line (product + quantity to fulfill).
+    source_class: FulfillmentAPI.Domain.FulfillmentOrderLine
+    physical_table: dbo.OrderLines
+    role: supporting_entity
+    key_attributes: [OrderLineId (PK), OrderId (FK), ProductId, Quantity]
+    relationships: [belongs to FulfillmentOrder]
+    lifecycle: Read-only; source of per-product need for allocation.
+    crud: [read]
+    ownership: shared physical table; produced externally
+    capabilities: [FA-CAP-001, FA-CAP-003]
+    evidence: Entities.cs:FulfillmentOrderLine; usp_AllocateInventory (reads OrderLines)
+    confidence: high
+    external_dependencies: [EXT-ORDERS]
+
+  - id: FA-ENT-005
+    name: StockRecord
+    purpose: Per-product inventory position used for availability and the target of allocation/restock.
+    source_class: FulfillmentAPI.Domain.StockRecord
+    physical_table: dbo.Inventory
+    role: aggregate_root
+    key_attributes: [ProductId (PK), QuantityOnHand, QuantityAllocated, ReorderLevel]
+    derived_members: [Available = QuantityOnHand - QuantityAllocated]
+    relationships: [keyed by ProductId]
+    lifecycle: >
+      Read for availability; written (QuantityAllocated by allocation proc; QuantityOnHand
+      by return-receipt proc). Base quantities are also maintained by external processes.
+    crud: [read, update-via-proc]
+    ownership: shared physical table; this app mutates allocation + restock quantities
+    capabilities: [FA-CAP-002, FA-CAP-003, FA-CAP-010]
+    evidence: Entities.cs:StockRecord; usp_AllocateInventory; usp_ReceiveReturnAndAdjust
+    confidence: high
+    external_dependencies: [EXT-INVENTORY]
+
+  - id: FA-ENT-006
+    name: InventoryAllocation
+    purpose: A reservation of stock for an order's product at a warehouse.
+    source_class: FulfillmentAPI.Domain.InventoryAllocation
+    physical_table: dbo.InventoryAllocations
+    role: aggregate_root
+    key_attributes: [InventoryAllocationId (PK), OrderId, ProductId, WarehouseId, QuantityAllocated, AllocationStatus, CreatedUtc]
+    states: [Allocated, Released, Consumed]   # CK_InventoryAllocations_Status (only 'Allocated' created in observed code)
+    relationships: [references Order, Product, Warehouse; drives pick-list items]
+    lifecycle: Created (status 'Allocated') by usp_AllocateInventory. No code path sets Released/Consumed.
+    crud: [create-via-proc, read]
+    ownership: this application (fulfillment-owned)
+    capabilities: [FA-CAP-003, FA-CAP-004]
+    evidence: Entities.cs:InventoryAllocation; usp_AllocateInventory; database/schema/04_fulfillment.sql:InventoryAllocations
+    confidence: high
+
+  - id: FA-ENT-007
+    name: PickList
+    purpose: A warehouse pick task for an order, containing items to pick.
+    source_class: FulfillmentAPI.Domain.PickList
+    physical_table: dbo.PickLists
+    role: aggregate_root
+    key_attributes: [PickListId (PK), OrderId, WarehouseId, PickStatus, CreatedUtc]
+    aggregates: [PickListItem]
+    states: [Created, InProgress, Completed]   # CK_PickLists_Status
+    relationships: [belongs to Order + Warehouse; Items]
+    lifecycle: Created from allocations; status rolls up as items are picked.
+    crud: [create, read, update]
+    ownership: this application
+    capabilities: [FA-CAP-004, FA-CAP-005]
+    evidence: Entities.cs:PickList; PickingService; database/schema/04_fulfillment.sql:PickLists
+    confidence: high
+
+  - id: FA-ENT-008
+    name: PickListItem
+    purpose: A single product line to pick, with target and picked quantities and a bin.
+    source_class: FulfillmentAPI.Domain.PickListItem
+    physical_table: dbo.PickListItems
+    role: supporting_entity
+    key_attributes: [PickListItemId (PK), PickListId (FK), ProductId, WarehouseBinId, QuantityToPick, QuantityPicked, IsPicked]
+    constraints: [QuantityToPick > 0; 0 <= QuantityPicked <= QuantityToPick]
+    relationships: [belongs to PickList; references WarehouseBin]
+    lifecycle: Created with the pick list; QuantityPicked/IsPicked updated during picking.
+    crud: [create, read, update]
+    ownership: this application
+    capabilities: [FA-CAP-004, FA-CAP-005]
+    evidence: Entities.cs:PickListItem; PickingService.MarkItemPickedAsync
+    confidence: high
+
+  - id: FA-ENT-009
+    name: Shipment
+    purpose: An outbound shipment for an order, carrying packages and carrier events.
+    source_class: FulfillmentAPI.Domain.Shipment
+    physical_table: dbo.Shipments
+    role: aggregate_root
+    key_attributes: [ShipmentId (PK), OrderId, ShipmentStatus, Carrier, TrackingNumber, CreatedUtc, DispatchedUtc]
+    aggregates: [ShipmentPackage, CarrierEvent]
+    states: [Created, Packed, Dispatched, InTransit, Delivered, Exception]   # CK_Shipments_Status
+    relationships: [belongs to Order; Packages; Events]
+    lifecycle: >
+      Created in 'Packed' state (via CreateShipmentWithPackage). Advances through the
+      transition graph; dispatch stamps carrier reference + DispatchedUtc.
+    crud: [create, read, update]
+    ownership: this application
+    capabilities: [FA-CAP-006, FA-CAP-007, FA-CAP-009]
+    evidence: Entities.cs:Shipment; ShipmentService; database/schema/04_fulfillment.sql:Shipments
+    confidence: high
+
+  - id: FA-ENT-010
+    name: ShipmentPackage
+    purpose: A physical package within a shipment (unique package code).
+    source_class: FulfillmentAPI.Domain.ShipmentPackage
+    physical_table: dbo.ShipmentPackages
+    role: supporting_entity
+    key_attributes: [ShipmentPackageId (PK), ShipmentId (FK), PackageCode (unique), WeightKg]
+    relationships: [belongs to Shipment]
+    lifecycle: Created with the shipment; presence is required before dispatch.
+    crud: [create, read]
+    ownership: this application
+    capabilities: [FA-CAP-006, FA-CAP-007]
+    evidence: Entities.cs:ShipmentPackage; database/schema/04_fulfillment.sql:ShipmentPackages (UQ PackageCode)
+    confidence: high
+
+  - id: FA-ENT-011
+    name: CarrierEvent
+    purpose: A tracking event reported for a shipment.
+    source_class: FulfillmentAPI.Domain.CarrierEvent
+    physical_table: dbo.CarrierEvents
+    role: supporting_entity
+    key_attributes: [CarrierEventId (PK), ShipmentId (FK), EventCode, Description, EventUtc, RecordedUtc]
+    constraints: [UQ(ShipmentId, EventCode, EventUtc) — enforces idempotency]
+    relationships: [belongs to Shipment]
+    lifecycle: Appended idempotently; not updated.
+    crud: [create, read]
+    ownership: this application (events may be supplied by carrier integrations)
+    capabilities: [FA-CAP-008, FA-CAP-009]
+    evidence: Entities.cs:CarrierEvent; ShipmentService.RecordCarrierEventAsync; database/schema/04_fulfillment.sql:UQ_CarrierEvents
+    confidence: high
+
+  - id: FA-ENT-012
+    name: ReturnForReceipt
+    purpose: Warehouse view of a return (minimal shape) used to validate receipt eligibility.
+    source_class: FulfillmentAPI.Domain.ReturnForReceipt
+    physical_table: dbo.Returns
+    role: read_model
+    key_attributes: [ReturnId (PK), ReturnNumber, OrderId, ReturnStatus]
+    relationships: [references Order]
+    lifecycle: >
+      Read for existence/eligibility. The receipt proc updates ReturnStatus to 'Received'.
+      Return creation and approval happen externally; the proc requires status 'Approved'.
+    crud: [read, update(status via proc to Received)]
+    ownership: shared physical table; return records produced + approved externally
+    capabilities: [FA-CAP-010]
+    evidence: Entities.cs:ReturnForReceipt; usp_ReceiveReturnAndAdjust
+    confidence: high
+    external_dependencies: [EXT-RETURNS]
+
+  - id: FA-ENT-013
+    name: ReturnReceipt
+    purpose: Record of a return physically received at a warehouse.
+    source_class: FulfillmentAPI.Domain.ReturnReceipt
+    physical_table: dbo.ReturnReceipts
+    role: aggregate_root
+    key_attributes: [ReturnReceiptId (PK), ReturnId (FK, unique), WarehouseId, ReceivedStatus, ReceivedUtc]
+    states: [Received, Inspected, Restocked]   # CK_ReturnReceipts_Status; proc inserts 'Restocked'
+    constraints: [UQ(ReturnId) — one receipt per return (idempotency)]
+    relationships: [references Return + Warehouse; drives WarehouseAdjustments]
+    lifecycle: Created by usp_ReceiveReturnAndAdjust (status 'Restocked'). Not updated by observed code.
+    crud: [create-via-proc, read]
+    ownership: this application
+    capabilities: [FA-CAP-010]
+    evidence: Entities.cs:ReturnReceipt; usp_ReceiveReturnAndAdjust; database/schema/04_fulfillment.sql:ReturnReceipts (UQ ReturnId)
+    confidence: high
+
+  - id: FA-ENT-014
+    name: WarehouseAdjustment
+    purpose: An inventory adjustment entry (e.g., restock from a return).
+    source_class: FulfillmentAPI.Domain.WarehouseAdjustment
+    physical_table: dbo.WarehouseAdjustments
+    role: supporting_entity
+    key_attributes: [WarehouseAdjustmentId (PK), ProductId, WarehouseId, QuantityDelta, Reason, RelatedReturnReceiptId, CreatedUtc]
+    relationships: [optional link to ReturnReceipt]
+    lifecycle: Created by usp_ReceiveReturnAndAdjust ('Return restock'); read for reporting.
+    crud: [create-via-proc, read]
+    ownership: this application
+    capabilities: [FA-CAP-010, FA-CAP-011]
+    evidence: Entities.cs:WarehouseAdjustment; usp_ReceiveReturnAndAdjust; ReturnReceiptService.GetAdjustmentsForReceiptAsync
+    confidence: high
+
+projections_and_dtos:
+  - name: WarehouseActivityRow
+    kind: reporting_projection
+    source_class: FulfillmentAPI.Application.WarehouseActivityRow
+    purpose: Shape of a row returned by usp_WarehouseActivitySummary; not a persisted entity.
+    evidence: FulfillmentQueryService.cs:WarehouseActivityRow
+  - name: AllocationResult
+    kind: transport_dto
+    source_class: FulfillmentAPI.Application.AllocationResult
+    purpose: Result of an allocation call (OrderId, WarehouseId, ProductsAllocated).
+    evidence: AllocationService.cs:AllocationResult
+  - name: "Api request models"
+    kind: transport_dto
+    source_class: FulfillmentAPI.Api.Models (AllocateRequest, CreatePickListRequest, MarkPickedRequest, CreateShipmentRequest, UpdateShipmentStatusRequest, CarrierEventRequest, ReceiveReturnRequest)
+    purpose: HTTP request bodies with DataAnnotations validation; not domain entities.
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Api/Models/Requests.cs
+
+external_vs_owned_summary:
+  created_or_maintained_by_this_app: [InventoryAllocation, PickList, PickListItem, Shipment, ShipmentPackage, CarrierEvent, ReturnReceipt, WarehouseAdjustment]
+  status_mutated_by_this_app: [FulfillmentOrder (Orders.OrderStatus), ReturnForReceipt (Returns.ReturnStatus -> Received), StockRecord (Inventory quantities)]
+  read_only_reference_or_external: [Warehouse, WarehouseBin, FulfillmentOrderLine]

@@ -1,0 +1,315 @@
+# FulfillmentAPI — Business Capability Catalog (reverse-engineered from implementation)
+# Confidence: high | medium | low
+# Verification: static_verified | behavior_verified | inferred
+version: 1
+application: FulfillmentAPI
+
+domains:
+  - id: FA-DOM-ORDERS
+    name: Fulfillment Order Intake (read)
+    capabilities: [FA-CAP-001]
+  - id: FA-DOM-INVENTORY
+    name: Inventory Availability & Allocation
+    capabilities: [FA-CAP-002, FA-CAP-003]
+  - id: FA-DOM-PICKING
+    name: Picking
+    capabilities: [FA-CAP-004, FA-CAP-005]
+  - id: FA-DOM-SHIPPING
+    name: Shipment Packaging, Dispatch & Tracking
+    capabilities: [FA-CAP-006, FA-CAP-007, FA-CAP-008, FA-CAP-009]
+  - id: FA-DOM-RETURNS
+    name: Return Receipt & Inventory Adjustment
+    capabilities: [FA-CAP-010, FA-CAP-011]
+  - id: FA-DOM-WAREHOUSE
+    name: Warehouse Reference & Activity Reporting
+    capabilities: [FA-CAP-012, FA-CAP-013]
+
+capabilities:
+  - id: FA-CAP-001
+    domain: FA-DOM-ORDERS
+    name: Retrieve pending / specific fulfillment orders
+    description: >
+      Expose orders awaiting fulfillment (status Confirmed or Allocated, capped 200) and a
+      single order with its lines, for warehouse systems to pick up work. Read-only; orders
+      are produced outside this application.
+    actor: Warehouse system / operator (API client with API key)
+    api_entry_point: GET /api/fulfillment/orders/pending ; GET /api/fulfillment/orders/{orderId}
+    preconditions: [valid API key]
+    business_decisions: [filter to Confirmed|Allocated for pending list]
+    state_changes: []
+    entities: [FA-ENT-003, FA-ENT-004]
+    db_access:
+      read: [Orders, OrderLines]
+      write: []
+    rules: [FA-RULE-010]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetPendingOrdersAsync/GetOrderAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/OrdersController.cs
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-ORDERS]
+
+  - id: FA-CAP-002
+    domain: FA-DOM-INVENTORY
+    name: Check product availability
+    description: Return on-hand, allocated, and available (OnHand - Allocated) quantities for a product.
+    actor: Warehouse system / operator
+    api_entry_point: GET /api/fulfillment/inventory/availability/{productId}
+    preconditions: [valid API key; inventory row exists]
+    business_decisions: [available = QuantityOnHand - QuantityAllocated]
+    state_changes: []
+    entities: [FA-ENT-005]
+    db_access: {read: [Inventory], write: []}
+    rules: [FA-RULE-001]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetStockAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/InventoryController.cs:Availability
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-INVENTORY]
+
+  - id: FA-CAP-003
+    domain: FA-DOM-INVENTORY
+    name: Allocate (reserve) inventory for an order
+    description: >
+      Physically reserve stock for an order at a warehouse via the stored procedure
+      usp_AllocateInventory. Increments Inventory.QuantityAllocated, inserts
+      InventoryAllocations, and advances a Pending/Confirmed order to Allocated. Cannot
+      exceed available stock; blocked for cancelled orders; idempotent for already-allocated
+      products. Also lists an order's allocations.
+    actor: Warehouse system / operator
+    api_entry_point: POST /api/fulfillment/inventory/allocate ; GET /api/fulfillment/inventory/allocations/{orderId}
+    preconditions: [valid API key; warehouse exists; order exists; order not cancelled; sufficient available stock]
+    business_decisions: [per product need vs available; order status roll-forward to Allocated]
+    state_changes: [Inventory.QuantityAllocated +=; InventoryAllocations created; Orders.OrderStatus Pending/Confirmed -> Allocated]
+    entities: [FA-ENT-006, FA-ENT-005, FA-ENT-003]
+    db_access:
+      read: [Warehouses, Orders, OrderLines, InventoryAllocations]
+      execute: [usp_AllocateInventory]
+      write_via_proc: [Inventory, InventoryAllocations, Orders]
+    rules: [FA-RULE-002, FA-RULE-003, FA-RULE-004, FA-RULE-012]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs:AllocateAsync
+      - database/procedures/procedures.sql:usp_AllocateInventory
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Allocation_* 
+
+  - id: FA-CAP-004
+    domain: FA-DOM-PICKING
+    name: Create pick list (with bin assignment)
+    description: >
+      Create a pick list for an allocated order, generating one item per allocated product
+      with a round-robin warehouse-bin assignment and QuantityToPick = allocated quantity.
+      Requires prior allocation; blocked for cancelled orders; at most one pick list per order.
+    actor: Warehouse operator
+    api_entry_point: POST /api/fulfillment/picking/picklists ; GET /api/fulfillment/picking/picklists/{pickListId}
+    preconditions: [valid API key; order exists; not cancelled; has Allocated allocations; no existing pick list]
+    business_decisions: [one item per allocated product; bin round-robin; QuantityToPick from allocation]
+    state_changes: [PickLists + PickListItems created (PickStatus=Created)]
+    entities: [FA-ENT-007, FA-ENT-008, FA-ENT-006, FA-ENT-002]
+    db_access:
+      read: [Orders, OrderLines, InventoryAllocations, WarehouseBins, PickLists]
+      write: [PickLists, PickListItems]
+    rules: [FA-RULE-005, FA-RULE-006, FA-RULE-007]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:CreatePickListAsync
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Picking_requires_prior_allocation
+
+  - id: FA-CAP-005
+    domain: FA-DOM-PICKING
+    name: Mark pick-list item picked
+    description: >
+      Record picked quantity for a pick-list item (0..QuantityToPick). Rolls up pick-list
+      status to InProgress/Completed and advances the order from Allocated to Picking.
+    actor: Warehouse operator
+    api_entry_point: POST /api/fulfillment/picking/items/{pickListItemId}/pick
+    preconditions: [valid API key; item exists; 0 <= quantityPicked <= QuantityToPick]
+    business_decisions: [IsPicked when picked>=toPick; PickStatus rollup; order Allocated->Picking]
+    state_changes: [PickListItems.QuantityPicked/IsPicked; PickLists.PickStatus; Orders.OrderStatus -> Picking]
+    entities: [FA-ENT-008, FA-ENT-007, FA-ENT-003]
+    db_access:
+      read: [PickListItems, PickLists, Orders]
+      write: [PickListItems, PickLists, Orders]
+    rules: [FA-RULE-008, FA-RULE-013]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs:MarkItemPickedAsync
+    confidence: high
+    verification: behavior_verified   # exercised within Full_warehouse_flow
+
+  - id: FA-CAP-006
+    domain: FA-DOM-SHIPPING
+    name: Create shipment package
+    description: >
+      Package an order into a shipment (status Packed) with a uniquely-coded package, once
+      all of the order's pick-list items are picked. Blocked for cancelled orders; advances
+      the order to Packed.
+    actor: Warehouse operator
+    api_entry_point: POST /api/fulfillment/shipments
+    preconditions: [valid API key; order exists; not cancelled; all items picked; package code unique]
+    business_decisions: [require all items picked; unique PackageCode]
+    state_changes: [Shipments + ShipmentPackages created (Packed); Orders.OrderStatus -> Packed]
+    entities: [FA-ENT-009, FA-ENT-010, FA-ENT-003]
+    db_access:
+      read: [Orders, PickLists, PickListItems, ShipmentPackages]
+      write: [Shipments, ShipmentPackages, Orders]
+    rules: [FA-RULE-009, FA-RULE-014]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:CreateShipmentWithPackageAsync
+    confidence: high
+    verification: behavior_verified   # Full_warehouse_flow
+
+  - id: FA-CAP-007
+    domain: FA-DOM-SHIPPING
+    name: Update shipment status (incl. dispatch)
+    description: >
+      Transition a shipment through its lifecycle with a validated transition graph.
+      Dispatch additionally requires a package and a carrier reference (carrier + tracking
+      number) and stamps DispatchedUtc. Order status rolls forward to Shipped/Delivered on
+      the corresponding transitions.
+    actor: Warehouse operator / carrier integration
+    api_entry_point: PUT /api/fulfillment/shipments/{shipmentId}/status
+    preconditions: [valid API key; shipment exists; transition allowed; dispatch requires package+carrier+tracking]
+    business_decisions: [IsValidShipmentTransition; CanDispatch guard; order roll-forward]
+    state_changes: [Shipments.ShipmentStatus (+Carrier/TrackingNumber/DispatchedUtc on dispatch); Orders.OrderStatus Shipped/Delivered]
+    entities: [FA-ENT-009, FA-ENT-003]
+    db_access:
+      read: [Shipments, ShipmentPackages, Orders]
+      write: [Shipments, Orders]
+    rules: [FA-RULE-015, FA-RULE-016, FA-RULE-017]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:UpdateStatusAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:IsValidShipmentTransition/CanDispatch
+    confidence: high
+    verification: behavior_verified   # Full_warehouse_flow (dispatch w/o carrier -> 409; with carrier -> ok)
+
+  - id: FA-CAP-008
+    domain: FA-DOM-SHIPPING
+    name: Record carrier tracking event (idempotent)
+    description: >
+      Append a carrier event (code, description, event time) to a shipment. Idempotent on
+      (ShipmentId, EventCode, EventUtc): a repeat returns the existing event instead of
+      inserting a duplicate.
+    actor: Carrier integration / warehouse system
+    api_entry_point: POST /api/fulfillment/shipments/{shipmentId}/events
+    preconditions: [valid API key; shipment exists]
+    business_decisions: [dedupe on (ShipmentId, EventCode, EventUtc)]
+    state_changes: [CarrierEvents created (if not already present)]
+    entities: [FA-ENT-011, FA-ENT-009]
+    db_access:
+      read: [Shipments, CarrierEvents]
+      write: [CarrierEvents]
+    rules: [FA-RULE-018]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs:RecordCarrierEventAsync
+      - database/schema/04_fulfillment.sql:UQ_CarrierEvents
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Carrier_events_are_idempotent
+
+  - id: FA-CAP-009
+    domain: FA-DOM-SHIPPING
+    name: Retrieve shipment tracking
+    description: >
+      Return a shipment's packages and carrier events, or list all shipments for an order.
+    actor: Warehouse system / downstream consumer
+    api_entry_point: GET /api/fulfillment/shipments/{shipmentId}/tracking ; GET /api/fulfillment/shipments/by-order/{orderId}
+    preconditions: [valid API key]
+    business_decisions: []
+    state_changes: []
+    entities: [FA-ENT-009, FA-ENT-010, FA-ENT-011]
+    db_access:
+      read: [Shipments, ShipmentPackages, CarrierEvents]
+      write: []
+    rules: []
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetShipmentTrackingAsync/GetShipmentsForOrderAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/ShipmentsController.cs:Tracking/ByOrder
+    confidence: high
+    verification: static_verified
+
+  - id: FA-CAP-010
+    domain: FA-DOM-RETURNS
+    name: Receive returned merchandise & adjust inventory
+    description: >
+      Record warehouse receipt of an Approved return via usp_ReceiveReturnAndAdjust:
+      restock inventory from the return lines, write WarehouseAdjustments, and set the
+      return to Received. Idempotent (one receipt per return). Only Approved returns may be
+      received. Explicitly does NOT change any financial/refund state.
+    actor: Warehouse operator
+    api_entry_point: POST /api/fulfillment/returns/receive
+    preconditions: [valid API key; warehouse exists; return exists; return status Approved]
+    business_decisions: [require Approved; restock OnHand; idempotent by ReturnId]
+    state_changes: [ReturnReceipts created; Inventory.QuantityOnHand +=; WarehouseAdjustments created; Returns.ReturnStatus -> Received]
+    entities: [FA-ENT-012, FA-ENT-013, FA-ENT-014, FA-ENT-005]
+    db_access:
+      read: [Warehouses, Returns, ReturnReceipts]
+      execute: [usp_ReceiveReturnAndAdjust]
+      write_via_proc: [ReturnReceipts, Inventory, WarehouseAdjustments, Returns]
+    rules: [FA-RULE-019, FA-RULE-020, FA-RULE-021]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs:ReceiveAsync
+      - database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust
+    confidence: high
+    verification: behavior_verified   # FulfillmentWorkflowTests.Return_receipt_restocks_inventory_and_is_idempotent_and_requires_approval
+    external_dependencies: [EXT-RETURNS]
+
+  - id: FA-CAP-011
+    domain: FA-DOM-RETURNS
+    name: List inventory adjustments for a return receipt
+    description: Return the WarehouseAdjustments generated by a given return receipt.
+    actor: Warehouse system
+    api_entry_point: GET /api/fulfillment/returns/receipts/{returnReceiptId}/adjustments
+    preconditions: [valid API key]
+    business_decisions: []
+    state_changes: []
+    entities: [FA-ENT-014]
+    db_access: {read: [WarehouseAdjustments], write: []}
+    rules: []
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs:GetAdjustmentsForReceiptAsync
+    confidence: high
+    verification: static_verified
+
+  - id: FA-CAP-012
+    domain: FA-DOM-WAREHOUSE
+    name: List active warehouses
+    description: Return active warehouse reference records.
+    actor: Warehouse system / operator
+    api_entry_point: GET /api/fulfillment/warehouses
+    preconditions: [valid API key]
+    business_decisions: [IsActive filter]
+    state_changes: []
+    entities: [FA-ENT-001]
+    db_access: {read: [Warehouses], write: []}
+    rules: []
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetWarehousesAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/WarehousesController.cs:List
+    confidence: high
+    verification: static_verified
+
+  - id: FA-CAP-013
+    domain: FA-DOM-WAREHOUSE
+    name: Generate warehouse activity summary (cross-domain report)
+    description: >
+      Produce per-warehouse activity counts (pick lists, shipments, allocations, orders
+      touched, staff vs web orders, distinct customers, distinct agents) via the stored
+      procedure usp_WarehouseActivitySummary, which joins fulfillment tables with shared
+      Orders/Customers and the externally-owned SalesAgents table.
+    actor: Operations / reporting consumer
+    api_entry_point: GET /api/fulfillment/warehouses/activity-summary?warehouseId=
+    preconditions: [valid API key]
+    business_decisions: [classify orders by OrderSource (OrderDesk vs CustomerPortal)]
+    state_changes: []
+    entities: [FA-ENT-001]
+    db_access:
+      read: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+      execute: [usp_WarehouseActivitySummary]
+      write: []
+    rules: [FA-RULE-022]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetActivitySummaryAsync
+      - database/procedures/procedures.sql:usp_WarehouseActivitySummary
+    confidence: high
+    verification: static_verified
+    external_dependencies: [EXT-SALESAGENTS, EXT-CUSTOMERS, EXT-ORDERS]
+    notes: Reporting projection (WarehouseActivityRow), not an operational entity.

@@ -1,0 +1,175 @@
+# OrderDesk — Reconstructed end-to-end workflows
+version: 1
+application: OrderDesk
+
+workflows:
+  - id: OD-WF-001
+    name: Quote-to-order (quotation lifecycle with discount approval)
+    objective: Turn a priced quotation into a confirmed sales order, enforcing discount approval and recording commission.
+    actor: Sales agent (+ approving agent for high discounts)
+    trigger: Quotations tab — create quote, add lines, apply discount, convert
+    capabilities: [OD-CAP-005, OD-CAP-006, OD-CAP-007, OD-CAP-008, OD-CAP-009]
+    entities: [OD-ENT-006, OD-ENT-007, OD-ENT-008, OD-ENT-011, OD-ENT-012, OD-ENT-009]
+    steps:
+      - Create quote (Draft) for a customer + agent; ExpiresUtc set (OD-RULE-001)
+      - Add product line(s); totals recalculated (OD-RULE-012, OD-RULE-013)
+      - Apply discount; route to approval if > 15% else auto-approve (OD-RULE-003)
+      - (If pending) approving agent approves/rejects (OD-RULE-004)
+      - Convert approved quote -> usp_ConvertQuoteToOrder (OD-RULE-005, OD-RULE-006)
+      - Procedure inserts Order (Confirmed, OrderSource=OrderDesk) + OrderLines (OD-RULE-008),
+        marks quote Converted, inserts SalesCommission (OD-RULE-009)
+    decision_points:
+      - discount > 15% ? pending approval : approved
+      - quote Approved & not expired & not converted & customer has mandatory info ? convert : reject
+    state_transitions:
+      quote: Draft -> (PendingApproval -> Approved | Rejected) | Approved -> Converted
+      order: (created) Confirmed
+    db_operations:
+      read: [Customers, SalesAgents, SalesQuotes, SalesQuoteLines, Products, DiscountApprovals]
+      write: [SalesQuotes, SalesQuoteLines, DiscountApprovals]
+      execute: [usp_ConvertQuoteToOrder]
+      write_via_proc: [Orders, OrderLines, SalesQuotes, SalesCommissions]
+    error_paths:
+      - Customer/agent not found at creation
+      - Add line on non-draft/pending quote rejected
+      - Convert while PendingApproval/expired/converted rejected (C# + SQL throws 50011/50012/50013)
+      - Convert with missing mandatory customer info rejected (C# + SQL throw 50014)
+    external_dependencies: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs
+      - database/procedures/procedures.sql:usp_ConvertQuoteToOrder
+      - tests/IntegrationTests/OrderDeskWorkflowTests.cs
+    confidence: high
+    verification: behavior_verified
+    mermaid: |
+      flowchart TD
+        A[Create quote - Draft] --> B[Add line items]
+        B --> C{Discount > 15%?}
+        C -- No --> D[Quote Approved]
+        C -- Yes --> E[Quote PendingApproval + DiscountApproval]
+        E --> F{Approve?}
+        F -- Reject --> G[Quote Rejected]
+        F -- Approve --> D
+        D --> H{Convertible? approved, not expired, not converted, customer info ok}
+        H -- No --> I[Reject with reason]
+        H -- Yes --> J[usp_ConvertQuoteToOrder]
+        J --> K[Order Confirmed + OrderLines]
+        J --> L[Quote -> Converted]
+        J --> M[SalesCommission recorded]
+
+  - id: OD-WF-002
+    name: Staff-assisted order creation
+    objective: Let staff place an order directly without a quote.
+    actor: Sales agent
+    trigger: OrderService.CreateStaffOrderAsync (service-layer; no dedicated UI form found)
+    capabilities: [OD-CAP-010]
+    entities: [OD-ENT-011, OD-ENT-012]
+    steps:
+      - Validate at least one line (OD-RULE-016)
+      - Validate customer exists + has mandatory info (OD-RULE-010)
+      - Validate acting agent exists (OD-RULE-016)
+      - Per line: validate stock availability (OD-RULE-007)
+      - Build order (Confirmed, OrderSource=OrderDesk) + lines; persist in a transaction
+    decision_points: [customer valid?, agent valid?, each line in stock?]
+    state_transitions:
+      order: (created) Confirmed
+    db_operations:
+      read: [Customers, SalesAgents, Inventory, Products]
+      write: [Orders, OrderLines]
+    error_paths: [empty lines, customer missing/invalid, agent missing, insufficient stock]
+    external_dependencies: []
+    evidence: src/OrderDesk/OrderDesk.Application/OrderService.cs:CreateStaffOrderAsync
+    confidence: high
+    verification: static_verified
+    notes: UI trigger unresolved; see analysis-gaps.md GAP-001.
+
+  - id: OD-WF-003
+    name: Order cancellation with authorized override
+    objective: Cancel an order, allowing authorized agents to override normal eligibility with an audit trail.
+    actor: Customer-service staff / authorized agent
+    trigger: Orders tab "Cancel order" command
+    capabilities: [OD-CAP-012]
+    entities: [OD-ENT-011, OD-ENT-005, OD-ENT-013]
+    steps:
+      - Load order; reject if already Cancelled (OD-RULE-017)
+      - Evaluate eligibility via usp_EvaluateCancellationEligibility (OD-RULE-014)
+      - If eligible -> cancel
+      - If not eligible and no override -> reject
+      - If not eligible and override -> require authorized agent + justification -> write CancellationOverride (OD-RULE-015)
+      - Set OrderStatus = Cancelled, store CancelReason
+    decision_points: [already cancelled?, eligible?, override requested?, agent authorized?, justification present?]
+    state_transitions:
+      order: (Pending|Confirmed|Allocated|other) -> Cancelled
+    db_operations:
+      read: [Orders, SalesAgents]
+      execute: [usp_EvaluateCancellationEligibility]
+      write: [Orders, CancellationOverrides]
+    error_paths: [order not found, already cancelled, not eligible (no override), agent unauthorized, missing justification]
+    external_dependencies: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync
+      - database/procedures/procedures.sql:usp_EvaluateCancellationEligibility
+      - tests/IntegrationTests/OrderDeskWorkflowTests.cs:Cancellation_override_requires_authorized_agent_and_writes_audit
+    confidence: high
+    verification: behavior_verified
+    mermaid: |
+      flowchart TD
+        A[Cancel requested] --> B{Already Cancelled?}
+        B -- Yes --> X[Reject]
+        B -- No --> C[usp_EvaluateCancellationEligibility]
+        C --> D{Eligible?}
+        D -- Yes --> H[Set Cancelled]
+        D -- No --> E{Override requested?}
+        E -- No --> X
+        E -- Yes --> F{Agent CanOverride and justification?}
+        F -- No --> X
+        F -- Yes --> G[Write CancellationOverride audit]
+        G --> H
+
+  - id: OD-WF-004
+    name: Return review (OrderDesk stage of a cross-application return)
+    objective: Approve or reject a customer-requested return.
+    actor: Customer-service staff
+    trigger: Returns tab "Approve" / "Reject"
+    capabilities: [OD-CAP-013]
+    entities: [OD-ENT-014]
+    steps:
+      - List returns (optionally by status)
+      - Select a return; require status == 'Requested' (OD-RULE-018)
+      - Approve -> 'Approved' or Reject -> 'Rejected'; record ReviewedByAgentId + ReviewedUtc
+    decision_points: [status == Requested?, approve or reject?]
+    state_transitions:
+      return: Requested -> Approved | Rejected
+    db_operations:
+      read: [Returns]
+      write: [Returns]
+    error_paths: [return not found, return not in Requested state]
+    external_dependencies: [EXT-RETURNS-CREATE, EXT-RETURNS-RECEIVE]
+    evidence: src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs:ReviewAsync
+    confidence: high
+    verification: static_verified
+    notes: >
+      Return creation ('Requested') and subsequent receipt ('Received'/'Closed') occur
+      outside OrderDesk. OrderDesk owns only the approve/reject step. The 'Received'/'Closed'
+      statuses in the Returns CHECK constraint are therefore driven by external actors.
+
+  - id: OD-WF-005
+    name: Shell load (application startup data refresh)
+    objective: Populate all seven tabs on window load.
+    actor: Any staff user
+    trigger: MainWindow Loaded event -> MainViewModel.InitializeAsync
+    capabilities: [OD-CAP-001, OD-CAP-003, OD-CAP-005, OD-CAP-011, OD-CAP-008, OD-CAP-013, OD-CAP-014]
+    steps:
+      - Customers search (no term), Products load, Quotes refresh, Orders refresh,
+        pending Approvals refresh, Returns refresh, Tasks refresh (agents)
+    db_operations:
+      read: [Customers, Products, ProductCategories, Inventory, SalesQuotes, SalesAgents, Orders, DiscountApprovals, Returns, SalesAgentTasks]
+      write: []
+    error_paths: [DB unavailable -> MessageBox warning in MainWindow.OnLoaded]
+    external_dependencies: []
+    evidence:
+      - src/OrderDesk/OrderDesk.Desktop/ViewModels/MainViewModel.cs:InitializeAsync
+      - src/OrderDesk/OrderDesk.Desktop/Views/MainWindow.xaml.cs:OnLoaded
+    confidence: high
+    verification: static_verified
+    notes: This is a UI data-refresh sequence (distinct from business workflows above).

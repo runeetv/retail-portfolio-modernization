@@ -1,0 +1,173 @@
+// Business capability catalog (ground truth).
+// classification: app-specific | partial-overlap | broadly-shared
+// Target mix ~50-60% app-specific, 20-30% partial-overlap, 15-20% broadly-shared.
+version: 1
+capabilities:
+  # ---- OrderDesk app-specific ----
+  - id: CAP-OD-QUOTE-CREATE
+    app: APP-ORDERDESK
+    name: Create sales quotation
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/QuoteService.cs#CreateQuoteAsync
+  - id: CAP-OD-QUOTE-LINES
+    app: APP-ORDERDESK
+    name: Add quotation line items
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/QuoteService.cs#AddLineAsync
+  - id: CAP-OD-DISCOUNT-APPROVAL
+    app: APP-ORDERDESK
+    name: Apply + approve manual discounts
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/QuoteService.cs#ApplyDiscountAsync,DecideDiscountAsync
+  - id: CAP-OD-QUOTE-CONVERT
+    app: APP-ORDERDESK
+    name: Convert approved quotation to order
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/QuoteService.cs#ConvertToOrderAsync -> dbo.usp_ConvertQuoteToOrder
+  - id: CAP-OD-COMMISSION
+    app: APP-ORDERDESK
+    name: Sales-agent commission calculation
+    classification: app-specific
+    evidence: database/procedures/procedures.sql#usp_ConvertQuoteToOrder; src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CalculateCommission
+  - id: CAP-OD-AGENT-TASKS
+    app: APP-ORDERDESK
+    name: Assigned sales-agent tasks
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/AgentTaskService.cs
+  - id: CAP-OD-CANCEL-OVERRIDE
+    app: APP-ORDERDESK
+    name: Authorized staff cancellation override with audit
+    classification: app-specific
+    evidence: src/OrderDesk/OrderDesk.Application/OrderService.cs#CancelOrderAsync
+
+  # ---- CustomerPortal app-specific ----
+  - id: CAP-CP-AUTH
+    app: APP-PORTAL
+    name: Customer local authentication
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/AuthService.cs
+  - id: CAP-CP-CART
+    app: APP-PORTAL
+    name: Shopping cart add/remove/edit
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/CartService.cs
+  - id: CAP-CP-COUPON
+    app: APP-PORTAL
+    name: Promotional coupon application
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/CartService.cs#ApplyCouponAsync; src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#EvaluateCoupon
+  - id: CAP-CP-CHECKOUT
+    app: APP-PORTAL
+    name: Idempotent cart checkout
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+  - id: CAP-CP-WISHLIST
+    app: APP-PORTAL
+    name: Wishlist maintenance
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/WishlistService.cs
+  - id: CAP-CP-SUPPORT
+    app: APP-PORTAL
+    name: Support tickets with status transitions
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs
+  - id: CAP-CP-RETURN-REQUEST
+    app: APP-PORTAL
+    name: Create return request
+    classification: app-specific
+    evidence: src/CustomerPortal/CustomerPortal.Application/ReturnService.cs#RequestReturnAsync
+
+  # ---- FulfillmentAPI app-specific ----
+  - id: CAP-FA-ALLOCATE
+    app: APP-FULFILL
+    name: Physical inventory allocation
+    classification: app-specific
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs -> dbo.usp_AllocateInventory
+  - id: CAP-FA-PICK
+    app: APP-FULFILL
+    name: Pick list creation + item picking
+    classification: app-specific
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs
+  - id: CAP-FA-PACKAGE
+    app: APP-FULFILL
+    name: Shipment packaging
+    classification: app-specific
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs#CreateShipmentWithPackageAsync
+  - id: CAP-FA-CARRIER-EVENTS
+    app: APP-FULFILL
+    name: Carrier event recording (idempotent)
+    classification: app-specific
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs#RecordCarrierEventAsync
+  - id: CAP-FA-RETURN-RECEIPT
+    app: APP-FULFILL
+    name: Warehouse receipt of returns + restock
+    classification: app-specific
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs -> dbo.usp_ReceiveReturnAndAdjust
+  - id: CAP-FA-ACTIVITY-SUMMARY
+    app: APP-FULFILL
+    name: Warehouse activity summary (cross-domain report)
+    classification: app-specific
+    evidence: database/procedures/procedures.sql#usp_WarehouseActivitySummary
+
+  # ---- Partial overlap (implemented differently per app) ----
+  - id: CAP-ORDER-CREATE
+    name: Order creation
+    classification: partial-overlap
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    note: OrderDesk via quote conversion / staff order; Portal via cart checkout. FulfillmentAPI never creates sales orders.
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs#CreateStaffOrderAsync
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs#ConvertToOrderAsync
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+  - id: CAP-CANCEL
+    name: Order cancellation
+    classification: partial-overlap
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    note: Staff rule (SQL, allows Allocated) vs customer rule (C#, stricter). FulfillmentAPI blocks processing of cancelled orders.
+    evidence:
+      - database/procedures/procedures.sql#usp_EvaluateCancellationEligibility
+      - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CustomerCanCancel
+  - id: CAP-INVENTORY-CHECK
+    name: Inventory availability
+    classification: partial-overlap
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    note: OrderDesk pre-order check; Portal display + checkout recheck; FulfillmentAPI physical allocation.
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs#IsAvailableAsync
+      - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs#DisplayAvailabilityAsync
+      - src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs#AllocateAsync
+  - id: CAP-RETURNS-PROCESS
+    name: Returns processing (lifecycle)
+    classification: partial-overlap
+    apps: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    note: Portal requests, OrderDesk approves, FulfillmentAPI receives.
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs
+      - src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs
+
+  # ---- Broadly shared ----
+  - id: CAP-CUSTOMER-MGMT
+    name: Customer management
+    classification: broadly-shared
+    apps: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    note: OrderDesk full edit; Portal self-service subset; FulfillmentAPI reads shipping only.
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CustomerService.cs#UpdateContactAsync
+      - src/CustomerPortal/CustomerPortal.Application/ProfileService.cs#UpdateSelfServiceAsync
+  - id: CAP-PRODUCT-BROWSE
+    name: Product catalog browsing
+    classification: broadly-shared
+    apps: [APP-ORDERDESK, APP-PORTAL]
+    evidence:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs#BrowseAsync
+      - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs#SearchAsync
+  - id: CAP-SHIPMENT-VISIBILITY
+    name: Shipment status visibility
+    classification: broadly-shared
+    apps: [APP-FULFILL, APP-PORTAL, APP-ORDERDESK]
+    note: FulfillmentAPI owns; Portal + OrderDesk read.
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs
+      - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs#GetShipmentsAsync

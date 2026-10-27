@@ -1,0 +1,41 @@
+@model SupportTicket
+@{
+    ViewData["Title"] = Model.Subject;
+}
+<h2>@Model.Subject</h2>
+<p>Status: <span class="badge bg-secondary">@Model.TicketStatus</span></p>
+
+<div class="mb-3">
+    @foreach (var m in Model.Messages.OrderBy(x => x.CreatedUtc))
+    {
+        <div class="card mb-2">
+            <div class="card-body">
+                <strong>@m.Author</strong> <small class="text-muted">@m.CreatedUtc.ToString("yyyy-MM-dd HH:mm")</small>
+                <p class="mb-0">@m.Body</p>
+            </div>
+        </div>
+    }
+</div>
+
+@if (Model.TicketStatus != "Closed")
+{
+    <form asp-action="AddMessage" asp-route-id="@Model.SupportTicketId" method="post" class="mb-3">
+        @Html.AntiForgeryToken()
+        <textarea name="body" class="form-control mb-1" rows="2" placeholder="Reply..."></textarea>
+        <button class="btn btn-primary btn-sm">Send</button>
+    </form>
+
+    <form asp-action="ChangeStatus" asp-route-id="@Model.SupportTicketId" method="post">
+        @Html.AntiForgeryToken()
+        <div class="input-group" style="max-width:360px">
+            <select name="newStatus" class="form-select">
+                <option value="Pending">Pending</option>
+                <option value="Resolved">Resolved</option>
+                <option value="Closed">Closed</option>
+                <option value="Open">Open</option>
+            </select>
+            <button class="btn btn-outline-secondary">Change status</button>
+        </div>
+    </form>
+}
+<a asp-action="Index" class="btn btn-link mt-3">Back to tickets</a>

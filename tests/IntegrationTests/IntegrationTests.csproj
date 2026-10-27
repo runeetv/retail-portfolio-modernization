@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.22" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OrderDesk\OrderDesk.Application\OrderDesk.Application.csproj" />
+    <ProjectReference Include="..\..\src\OrderDesk\OrderDesk.Infrastructure\OrderDesk.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\CustomerPortal\CustomerPortal.Application\CustomerPortal.Application.csproj" />
+    <ProjectReference Include="..\..\src\CustomerPortal\CustomerPortal.Infrastructure\CustomerPortal.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\FulfillmentAPI\FulfillmentAPI.Application\FulfillmentAPI.Application.csproj" />
+    <ProjectReference Include="..\..\src\FulfillmentAPI\FulfillmentAPI.Infrastructure\FulfillmentAPI.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Shared\LegacyRetail.Common\LegacyRetail.Common.csproj" />
+  </ItemGroup>
+</Project>

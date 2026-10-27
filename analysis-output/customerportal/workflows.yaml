@@ -1,0 +1,187 @@
+# CustomerPortal — Reconstructed end-to-end workflows
+version: 1
+application: CustomerPortal
+
+workflows:
+  - id: CP-WF-001
+    name: Sign in and establish session
+    goal: Authenticate a shopper and establish an authorized cookie session.
+    actor: Customer
+    entry_point: POST /Account/Login
+    capabilities: [CP-CAP-001]
+    steps:
+      - Submit username + password (antiforgery-validated form)
+      - AuthService verifies account exists, not locked, PBKDF2 matches
+      - Update LastLoginUtc
+      - Issue cookie principal with CustomerId/CustomerAccountId/Username/CustomerStatus claims
+      - Redirect to returnUrl (if local) else Catalog
+    decision_points: [account found?, locked?, password valid?]
+    services: [AuthService]
+    controllers: [AccountController]
+    state_changes: [CustomerAccounts.LastLoginUtc updated]
+    transaction_boundary: single SaveChanges
+    failure_paths: [invalid credentials, locked account]
+    external_dependencies: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/AuthService.cs:SignInAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/AccountController.cs:Login
+    confidence: high
+    verification: static_verified
+
+  - id: CP-WF-002
+    name: Shop and checkout (cart to order)
+    goal: Turn a browsing session into a placed order, idempotently.
+    actor: Authenticated customer
+    entry_point: GET /Catalog/Index -> POST /Cart/Add -> (POST /Cart/ApplyCoupon) -> GET /Checkout/Index -> POST /Checkout/Place
+    capabilities: [CP-CAP-004, CP-CAP-006, CP-CAP-007, CP-CAP-009]
+    steps:
+      - Browse/search catalog (availability shown) [anonymous allowed]
+      - Add product(s) to the active cart (quantity merged)
+      - Optionally apply a coupon (eligibility validated, code stored)
+      - Open checkout -> server issues a fresh idempotency key into the form
+      - Place order -> CheckoutService:
+          - return existing order if idempotency key already used
+          - require non-empty cart + profile email/shipping
+          - recheck inventory per line
+          - compute coupon discount; create Order (Confirmed/CustomerPortal) + lines
+          - record CouponRedemption if discount > 0
+          - mark cart CheckedOut
+      - Redirect to the new order's details
+    decision_points: [key already used?, cart empty?, profile complete?, each line available?, coupon still valid?]
+    services: [CatalogBrowseService, CartService, CheckoutService]
+    controllers: [CatalogController, CartController, CheckoutController]
+    state_changes: [ShoppingCarts/Items, Orders, OrderLines, CouponRedemptions]
+    transaction_boundary: CheckoutService wraps order+redemption writes in Database.CreateExecutionStrategy().ExecuteAsync + BeginTransaction/Commit
+    failure_paths: [empty cart, missing profile info, insufficient stock, concurrent duplicate (DbUpdateException -> return winner)]
+    external_dependencies: [EXT-INVENTORY-UPDATES]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/CheckoutController.cs
+      - tests/IntegrationTests/CustomerPortalWorkflowTests.cs
+    confidence: high
+    verification: behavior_verified
+    mermaid: |
+      flowchart TD
+        A[Browse catalog] --> B[Add to cart]
+        B --> C{Apply coupon?}
+        C -- Yes --> D[Validate coupon eligibility]
+        C -- No --> E[Open checkout]
+        D --> E
+        E --> F[Server issues idempotency key]
+        F --> G[POST Place]
+        G --> H{Key already used?}
+        H -- Yes --> R[Return existing order]
+        H -- No --> I{Cart non-empty and profile complete?}
+        I -- No --> X[Reject]
+        I -- Yes --> J{All lines available?}
+        J -- No --> X
+        J -- Yes --> K[Create Order Confirmed + lines]
+        K --> L{Coupon discount > 0?}
+        L -- Yes --> M[Record CouponRedemption]
+        L -- No --> N[Mark cart CheckedOut]
+        M --> N
+        N --> O[Redirect to order details]
+
+  - id: CP-WF-003
+    name: Customer-initiated order cancellation
+    goal: Allow a customer to cancel their own order while still eligible.
+    actor: Authenticated customer
+    entry_point: POST /Orders/Cancel/{id}
+    capabilities: [CP-CAP-011]
+    steps:
+      - Load the order filtered by the customer's id (ownership)
+      - Reject if not found or already cancelled
+      - Allow only when status is Pending or Confirmed (PortalRules.CustomerCanCancel)
+      - Set OrderStatus=Cancelled + CancelReason
+    decision_points: [owned?, already cancelled?, status Pending/Confirmed?]
+    services: [OrderHistoryService]
+    controllers: [OrdersController]
+    state_changes: [Orders.OrderStatus -> Cancelled]
+    transaction_boundary: single SaveChanges
+    failure_paths: [not found/not owned, already cancelled, status not eligible]
+    external_dependencies: []
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:RequestCancellationAsync
+      - tests/IntegrationTests/CustomerPortalWorkflowTests.cs:Customer_cancellation_is_stricter_blocks_allocated
+    confidence: high
+    verification: behavior_verified
+    mermaid: |
+      flowchart TD
+        A[Cancel requested] --> B{Owned order found?}
+        B -- No --> X[Reject: not found]
+        B -- Yes --> C{Already cancelled?}
+        C -- Yes --> X2[Reject: already cancelled]
+        C -- No --> D{Status Pending or Confirmed?}
+        D -- No --> X3[Reject: contact support]
+        D -- Yes --> E[Set Cancelled + reason]
+
+  - id: CP-WF-004
+    name: Create a return request
+    goal: Let a customer request a return for an eligible delivered order.
+    actor: Authenticated customer
+    entry_point: POST /Orders/RequestReturn/{id}
+    capabilities: [CP-CAP-012]
+    steps:
+      - Load the order with lines (ownership by customer id)
+      - Require Delivered status within 30-day window (PortalRules.CanRequestReturn)
+      - Block if a non-Rejected return already exists for the order
+      - Create a Return (status Requested) copying the order's lines
+    decision_points: [owned?, delivered & within window?, existing active return?]
+    services: [ReturnService]
+    controllers: [OrdersController]
+    state_changes: [Returns + ReturnLines created with status Requested]
+    transaction_boundary: single SaveChanges
+    failure_paths: [not found/not owned, not eligible, duplicate return]
+    external_dependencies: [EXT-RETURNS-TRANSITION]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs:RequestReturnAsync
+      - tests/IntegrationTests/CustomerPortalWorkflowTests.cs:Return_request_only_within_window_for_delivered
+    confidence: high
+    verification: behavior_verified
+    notes: The portal only creates the 'Requested' return; its subsequent review/receipt transitions are performed by external actors.
+
+  - id: CP-WF-005
+    name: View order + shipment tracking
+    goal: Show a customer their order detail with cancel/return eligibility and shipment tracking.
+    actor: Authenticated customer
+    entry_point: GET /Orders/Details/{id}
+    capabilities: [CP-CAP-010, CP-CAP-014]
+    steps:
+      - Load own order (ownership) with lines
+      - Compute CanCancel (PortalRules.CustomerCanCancel) and CanReturn (PortalRules.CanRequestReturn)
+      - Load tracking via TrackingService (verifies ownership, reads Shipments + CarrierEvents)
+      - Present friendly shipment statuses
+    decision_points: [owned?]
+    services: [OrderHistoryService, TrackingService]
+    controllers: [OrdersController]
+    state_changes: []
+    transaction_boundary: read-only
+    failure_paths: [not found/not owned -> 404]
+    external_dependencies: [EXT-SHIPMENTS, EXT-CARRIEREVENTS]
+    evidence:
+      - src/CustomerPortal/CustomerPortal.Web/Controllers/OrdersController.cs:Details
+      - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs:GetOrderTrackingAsync
+    confidence: high
+    verification: static_verified
+
+  - id: CP-WF-006
+    name: Support ticket lifecycle
+    goal: Let a customer raise, reply to, and transition a support ticket.
+    actor: Authenticated customer
+    entry_point: POST /Support/Create; POST /Support/AddMessage/{id}; POST /Support/ChangeStatus/{id}
+    capabilities: [CP-CAP-015, CP-CAP-016, CP-CAP-017]
+    steps:
+      - Create ticket (subject required) Open + initial message
+      - Add messages while ticket is not Closed
+      - Change status following the allowed transition graph
+    decision_points: [subject provided?, ticket owned?, ticket not Closed?, transition valid?]
+    services: [SupportTicketService]
+    controllers: [SupportController]
+    state_changes: [SupportTickets + SupportTicketMessages]
+    transaction_boundary: per-operation SaveChanges
+    failure_paths: [missing subject, not owned, ticket closed, invalid transition]
+    external_dependencies: [EXT-SUPPORT-AGENT]
+    evidence: src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs
+    confidence: high
+    verification: static_verified
+    notes: Agent-authored replies (Author != 'Customer') are allowed by the schema but not produced by portal code.

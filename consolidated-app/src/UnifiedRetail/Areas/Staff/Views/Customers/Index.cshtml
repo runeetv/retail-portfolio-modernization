@@ -1,0 +1,18 @@
+@model List<OrderDesk.Domain.Customer>
+@{
+    ViewData["Title"] = "Customers";
+}
+<h1>Customers</h1>
+<form method="get" class="card">
+    <input name="term" value="@ViewBag.Term" placeholder="name or email" />
+    <button class="btn" type="submit">Search</button>
+</form>
+<table>
+    <thead><tr><th>Name</th><th>Email</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var c in Model)
+    {
+        <tr><td>@c.FullName</td><td>@c.Email</td><td>@c.CustomerStatus</td><td><a asp-action="Edit" asp-route-id="@c.CustomerId">Edit</a></td></tr>
+    }
+    </tbody>
+</table>

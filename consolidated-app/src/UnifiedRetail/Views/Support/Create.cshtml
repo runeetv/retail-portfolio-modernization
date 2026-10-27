@@ -1,0 +1,13 @@
+@{
+    ViewData["Title"] = "New ticket";
+}
+<h1>New support ticket</h1>
+<div class="card" style="max-width:520px">
+    <form method="post">
+        @Html.AntiForgeryToken()
+        <p><label>Subject<br /><input name="subject" required style="width:100%" /></label></p>
+        <p><label>Message<br /><textarea name="body" rows="4" style="width:100%"></textarea></label></p>
+        <p><label>Related order id (optional)<br /><input name="relatedOrderId" type="number" /></label></p>
+        <button class="btn" type="submit">Create</button>
+    </form>
+</div>

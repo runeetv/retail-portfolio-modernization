@@ -1,0 +1,28 @@
+@{
+    ViewData["Title"] = "Warehouse";
+    var pending = ViewBag.Pending as List<FulfillmentAPI.Domain.FulfillmentOrder> ?? new();
+    var warehouses = ViewBag.Warehouses as List<FulfillmentAPI.Domain.Warehouse> ?? new();
+}
+<h1>Warehouse</h1>
+<p>
+    <a asp-area="Warehouse" asp-controller="Returns" asp-action="Index">Receive returns</a> ·
+    <a asp-area="Warehouse" asp-controller="Reports" asp-action="Index">Activity report</a>
+</p>
+<h3>Pending fulfillment orders (Confirmed / Allocated)</h3>
+@if (pending.Count == 0) { <p>No pending orders.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Order</th><th>Status</th><th>Source</th><th>Placed</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var o in pending)
+        {
+            <tr>
+                <td>@o.OrderNumber</td><td>@o.OrderStatus</td><td>@o.OrderSource</td><td>@o.PlacedUtc.ToString("yyyy-MM-dd")</td>
+                <td><a asp-controller="Fulfill" asp-action="Order" asp-route-id="@o.OrderId">Fulfill</a></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+<p style="color:#64748b;font-size:13px">Active warehouses: @string.Join(", ", warehouses.Select(w => $"{w.WarehouseId}:{w.Code}"))</p>

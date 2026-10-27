@@ -1,0 +1,131 @@
+# Evidence Index — LegacyRetailPortfolio (Stage 2 consolidation)
+# Maps each Stage 2 portfolio finding to (a) the Stage 1 evidence IDs it consolidates and
+# (b) the Stage 2 verification evidence (source/SQL/test) gathered in Phase B.
+#
+# verification values:
+#   behavior_verified - asserted by a passing test
+#   source_verified   - confirmed by reading source and/or SQL
+#   inferred          - reconstructed; not directly asserted
+
+meta:
+  stage1_sources:
+    - analysis-output/orderdesk/      # OD-CAP/ENT/RULE/WF
+    - analysis-output/customerportal/ # CP-CAP/ENT/RULE/WF
+    - analysis-output/fulfillmentapi/ # FA-CAP/ENT/RULE/WF
+  stage1_id_ranges:
+    orderdesk: "OD-CAP-001..016 / OD-ENT-001..015 / OD-RULE-001..020 / OD-WF-001..005"
+    customerportal: "CP-CAP-001..018 / CP-ENT-001..020 / CP-RULE-001..023 / CP-WF-001..006"
+    fulfillmentapi: "FA-CAP-001..013 / FA-ENT-001..014 / FA-RULE-001..024 / FA-WF-001..004"
+  cross_app_test_run:
+    command: 'dotnet test tests\IntegrationTests\IntegrationTests.csproj --filter "FullyQualifiedName~CrossAppWorkflowTests"'
+    result: "Passed 4/4"
+
+shared_entities:
+  - id: CE-ORDER
+    table: dbo.Orders
+    models: [OrderDesk.Order, CustomerPortal.CustomerOrder, FulfillmentAPI.FulfillmentOrder]
+    writers: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    evidence:
+      source:
+        - "src/*/*.Infrastructure (DbContext ToTable(\"Orders\"))"
+        - database/procedures/procedures.sql#usp_ConvertQuoteToOrder
+      verification: source_verified
+  - id: CE-CUSTOMER
+    table: dbo.Customers
+    models: [OrderDesk.Customer, "CustomerPortal.ShopperProfile (+ CustomerAccount 1:1)"]
+    writers: [APP-ORDERDESK, APP-PORTAL]
+    readers: [APP-FULFILL]
+    evidence:
+      source: ["src/*/*.Infrastructure (ToTable(\"Customers\"))"]
+      verification: source_verified
+  - id: CE-INVENTORY
+    table: dbo.Inventory
+    models: [OrderDesk.InventoryItem, CustomerPortal.StockLevel, FulfillmentAPI.StockRecord]
+    writers: [APP-FULFILL]
+    readers: [APP-ORDERDESK, APP-PORTAL]
+    evidence:
+      source: [database/procedures/procedures.sql#usp_AllocateInventory]
+      verification: source_verified
+  - id: CE-RETURN
+    table: dbo.Returns
+    models: [OrderDesk.ReturnRequest, CustomerPortal.CustomerReturn, FulfillmentAPI.ReturnForReceipt]
+    writers: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    evidence:
+      source: [database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust]
+      verification: behavior_verified
+  - id: CE-SHIPMENT
+    table: dbo.Shipments
+    models: ["FulfillmentAPI.Shipment (writer)", "CustomerPortal.TrackedShipment (RO)", "OrderDesk.ShipmentStatusView (RO)"]
+    writers: [APP-FULFILL]
+    readers: [APP-PORTAL, APP-ORDERDESK]
+    evidence:
+      source: [src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs]
+      verification: behavior_verified
+  - id: CE-CARRIER-EVENT
+    table: dbo.CarrierEvents
+    models: ["FulfillmentAPI.CarrierEvent (writer)", "CustomerPortal.TrackingEvent (RO)"]
+    writers: [APP-FULFILL]
+    readers: [APP-PORTAL]
+    evidence:
+      source: [src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs]
+      verification: source_verified
+
+dependencies:
+  - id: DEP-ORDER-HANDOFF
+    stage1: [OD-CAP-010, CP-CAP-009, FA-CAP-001, FA-CAP-003]
+    verification: behavior_verified
+    tests:
+      - "CrossAppWorkflowTests.cs#WorkflowA_staff_quote_to_order_then_warehouse_fulfillment (passed)"
+      - "CrossAppWorkflowTests.cs#WorkflowD_cancellation_blocks_fulfillment (passed)"
+  - id: DEP-SHIPMENT-READ
+    stage1: [FA-CAP-005, CP-CAP-013, OD-CAP-014]
+    verification: behavior_verified
+    tests: ["CrossAppWorkflowTests.cs#Cross_app_shipment_visibility (passed)"]
+  - id: DEP-RETURN-LIFECYCLE
+    stage1: [CP-CAP-015, OD-CAP-013, FA-CAP-011]
+    verification: behavior_verified
+    tests: ["CrossAppWorkflowTests.cs#WorkflowC_return_request_review_receipt (passed)"]
+  - id: DEP-REPORT-JOIN
+    note: >
+      FulfillmentAPI usp_WarehouseActivitySummary joins to OrderDesk-owned dbo.SalesAgents via
+      Orders.PlacedByAgentId — a cross-domain read inside a FulfillmentAPI-only report.
+    stage1: [FA-CAP-013]
+    verification: source_verified
+    source: [database/procedures/procedures.sql#usp_WarehouseActivitySummary]
+
+workflows:
+  - id: XWF-A
+    stage1: [OD-WF-002, FA-WF-001, FA-WF-002]
+    verification: behavior_verified
+  - id: XWF-B
+    stage1: [CP-WF-003, CP-WF-005, FA-WF-002]
+    verification: source_verified
+  - id: XWF-C
+    stage1: [CP-WF-006, OD-WF-004, FA-WF-004]
+    verification: behavior_verified
+  - id: XWF-D
+    stage1: [OD-WF-003, CP-WF-004, FA-WF-001]
+    verification: behavior_verified
+
+rule_comparisons:
+  - id: RULE-CANCEL
+    stage1: [OD-RULE-007, OD-RULE-008, CP-RULE-010]
+    verification: behavior_verified
+  - id: RULE-MANDATORY-INFO
+    stage1: [OD-RULE-003, OD-RULE-004, CP-RULE-005]
+    verification: source_verified
+  - id: RULE-AVAILABILITY
+    stage1: [OD-RULE-012, CP-RULE-013, FA-RULE-010]
+    verification: source_verified
+  - id: RULE-DISCOUNT-APPROVAL
+    stage1: [OD-RULE-015]
+    verification: source_verified
+  - id: RULE-COUPON-ELIGIBILITY
+    stage1: [CP-RULE-016]
+    verification: source_verified
+  - id: RULE-RETURN-WINDOW
+    stage1: [CP-RULE-019]
+    verification: source_verified
+  - id: RULE-IDEMPOTENCY
+    stage1: [CP-RULE-009, FA-RULE-018, FA-RULE-019]
+    verification: source_verified

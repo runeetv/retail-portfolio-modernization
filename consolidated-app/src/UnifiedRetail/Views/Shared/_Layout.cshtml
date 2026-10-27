@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - UnifiedRetail</title>
+    <style>
+        body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; color: #1c2430; }
+        header { background: #0f1420; color: #fff; padding: 12px 20px; display: flex; gap: 18px; align-items: center; }
+        header a { color: #cfe0ff; text-decoration: none; font-size: 14px; }
+        header a:hover { color: #fff; }
+        header .brand { font-weight: 700; color: #fff; }
+        .nav-right { margin-left: auto; font-size: 13px; color: #9fb0c9; }
+        main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+        h1 { font-size: 22px; }
+        table { border-collapse: collapse; width: 100%; font-size: 14px; }
+        th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #e3e8ef; }
+        th { color: #55627a; }
+        .msg { padding: 10px 12px; border-radius: 6px; margin: 10px 0; }
+        .ok { background: #e6f6ec; color: #1f7a42; }
+        .err { background: #fdecea; color: #b42318; }
+        .btn { display: inline-block; padding: 6px 12px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; text-decoration: none; font-size: 14px; }
+        .btn.secondary { background: #64748b; }
+        input, select { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
+        form.inline { display: inline; }
+        .card { border: 1px solid #e3e8ef; border-radius: 10px; padding: 16px; margin: 12px 0; }
+    </style>
+</head>
+<body>
+    <header>
+        <span class="brand">UnifiedRetail</span>
+        <a asp-area="" asp-controller="Catalog" asp-action="Index">Shop</a>
+        <a asp-area="" asp-controller="Orders" asp-action="Index">My Orders</a>
+        <a asp-area="" asp-controller="Cart" asp-action="Index">Cart</a>
+        <a asp-area="Staff" asp-controller="Home" asp-action="Index">Staff</a>
+        <a asp-area="Warehouse" asp-controller="Home" asp-action="Index">Warehouse</a>
+        <span class="nav-right">
+            @if (User?.Identity?.IsAuthenticated == true)
+            {
+                @($"{User.Identity!.Name}") <span>· </span>
+                <a asp-area="" asp-controller="Account" asp-action="Logout">Sign out</a>
+            }
+            else
+            {
+                <a asp-area="" asp-controller="Account" asp-action="Login">Sign in</a>
+            }
+        </span>
+    </header>
+    <main>
+        @if (TempData["Ok"] is string ok) { <div class="msg ok">@ok</div> }
+        @if (TempData["Err"] is string err) { <div class="msg err">@err</div> }
+        @RenderBody()
+    </main>
+</body>
+</html>

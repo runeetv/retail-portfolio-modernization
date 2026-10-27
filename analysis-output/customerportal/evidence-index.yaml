@@ -1,0 +1,92 @@
+# CustomerPortal — Evidence Index
+# Maps analysis to inspected source/SQL/test evidence. Paths are repo-relative.
+version: 1
+application: CustomerPortal
+
+inspected_sources:
+  domain:
+    - src/CustomerPortal/CustomerPortal.Domain/Entities.cs
+    - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs
+    - src/CustomerPortal/CustomerPortal.Domain/CustomerPortal.Domain.csproj
+  infrastructure:
+    - src/CustomerPortal/CustomerPortal.Infrastructure/PortalDbContext.cs
+    - src/CustomerPortal/CustomerPortal.Infrastructure/CustomerPortal.Infrastructure.csproj
+  application:
+    - src/CustomerPortal/CustomerPortal.Application/AuthService.cs
+    - src/CustomerPortal/CustomerPortal.Application/ProfileService.cs
+    - src/CustomerPortal/CustomerPortal.Application/CatalogBrowseService.cs
+    - src/CustomerPortal/CustomerPortal.Application/CartService.cs
+    - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs
+    - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs
+    - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs
+    - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs
+    - src/CustomerPortal/CustomerPortal.Application/SupportTicketService.cs
+    - src/CustomerPortal/CustomerPortal.Application/WishlistService.cs
+    - src/CustomerPortal/CustomerPortal.Application/ServiceResult.cs
+    - src/CustomerPortal/CustomerPortal.Application/CustomerPortal.Application.csproj
+  web:
+    - src/CustomerPortal/CustomerPortal.Web/Program.cs
+    - src/CustomerPortal/CustomerPortal.Web/CurrentUser.cs
+    - src/CustomerPortal/CustomerPortal.Web/appsettings.json
+    - src/CustomerPortal/CustomerPortal.Web/Models/ViewModels.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/AccountController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/HomeController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/CatalogController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/CartController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/CheckoutController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/OrdersController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/ReturnsController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/SupportController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/WishlistController.cs
+    - src/CustomerPortal/CustomerPortal.Web/Controllers/ProfileController.cs
+    - src/CustomerPortal/CustomerPortal.Web/CustomerPortal.Web.csproj
+    - src/CustomerPortal/CustomerPortal.Web/Views (Razor views enumerated; bindings confirm controller/VM wiring)
+  shared_infra:
+    - src/Shared/LegacyRetail.Common/DbConnectionConfig.cs
+    - src/Shared/LegacyRetail.Common/PasswordHasher.cs
+  sql:
+    - database/schema/01_schema.sql   # shared tables used by the portal (Orders idempotency index, status/source CKs)
+    - database/schema/03_customerportal.sql # portal-owned tables + constraints
+  tests:
+    - tests/CustomerPortal.Tests/PortalRulesTests.cs
+    - tests/IntegrationTests/CustomerPortalWorkflowTests.cs
+
+tests_executed:
+  - command: dotnet test tests/CustomerPortal.Tests/CustomerPortal.Tests.csproj
+    result: Passed 16/16
+    verifies: [CP-RULE-008, CP-RULE-015, CP-RULE-017, CP-RULE-021]
+  - command: dotnet test tests/IntegrationTests (filter CustomerPortalWorkflowTests)
+    result: Passed 6/6
+    verifies: [CP-CAP-006, CP-CAP-007, CP-CAP-009, CP-CAP-011, CP-CAP-012,
+               CP-RULE-008, CP-RULE-009, CP-RULE-011, CP-RULE-012, CP-RULE-014, CP-RULE-015, CP-RULE-017]
+    environment: LegacyRetailDB on (localdb)\\MSSQLLocalDB (pre-provisioned; disposable rows created by TestData)
+
+id_cross_reference:
+  capabilities_file: analysis-output/customerportal/capabilities.yaml
+  entities_file: analysis-output/customerportal/entities.yaml
+  rules_file: analysis-output/customerportal/business-rules.yaml
+  workflows_file: analysis-output/customerportal/workflows.yaml
+  dependencies_file: analysis-output/customerportal/dependencies.yaml
+
+key_evidence_map:
+  CP-CAP-009:   # idempotent checkout
+    - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs:CheckoutAsync
+    - database/schema/01_schema.sql:UQ_Orders_Idempotency
+    - tests/IntegrationTests/CustomerPortalWorkflowTests.cs:Checkout_creates_order_and_is_idempotent
+  CP-CAP-011:   # customer cancellation (stricter)
+    - src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs:CustomerCanCancel
+    - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs:RequestCancellationAsync
+    - tests/IntegrationTests/CustomerPortalWorkflowTests.cs:Customer_cancellation_is_stricter_blocks_allocated
+  CP-RULE-014:  # ownership
+    - tests/IntegrationTests/CustomerPortalWorkflowTests.cs:Ownership_enforced_cannot_cancel_another_customers_order
+
+note_on_test_cross_reference: >
+  tests/CustomerPortal.Tests/PortalRulesTests.cs contains an assertion that references
+  OrderDesk.Domain.OrderDeskRules to characterize a cancellation-eligibility difference.
+  That reference lives in the test project, not in CustomerPortal application code, and was
+  not used to infer any behavior of another application.
+
+unresolved_or_uninspected:
+  - Razor views were enumerated and their tag-helper bindings sampled (Login, Cart, Checkout,
+    Orders) to confirm antiforgery + controller/VM wiring; not every .cshtml was read line-by-line.
+  - dbo.Shipments / dbo.CarrierEvents DDL not inspected (defined outside the portal/shared schema files; external).

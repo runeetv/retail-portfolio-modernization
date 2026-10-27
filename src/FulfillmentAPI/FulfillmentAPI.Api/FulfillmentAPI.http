@@ -1,0 +1,105 @@
+@host = http://localhost:5201
+@apiKey = dev-fulfillment-key
+
+### Health (no API key required)
+GET {{host}}/health
+
+### List warehouses
+GET {{host}}/api/fulfillment/warehouses
+X-Api-Key: {{apiKey}}
+
+### Pending fulfillment orders
+GET {{host}}/api/fulfillment/orders/pending
+X-Api-Key: {{apiKey}}
+
+### Get one order (replace 1)
+GET {{host}}/api/fulfillment/orders/1
+X-Api-Key: {{apiKey}}
+
+### Check product availability (replace 1)
+GET {{host}}/api/fulfillment/inventory/availability/1
+X-Api-Key: {{apiKey}}
+
+### Allocate inventory for an order (replace ids)
+POST {{host}}/api/fulfillment/inventory/allocate
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "orderId": 1,
+  "warehouseId": 1
+}
+
+### List allocations for an order
+GET {{host}}/api/fulfillment/inventory/allocations/1
+X-Api-Key: {{apiKey}}
+
+### Create a pick list (order must be allocated)
+POST {{host}}/api/fulfillment/picking/picklists
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "orderId": 1,
+  "warehouseId": 1
+}
+
+### Mark a pick-list item picked (replace item id)
+POST {{host}}/api/fulfillment/picking/items/1/pick
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "quantityPicked": 1
+}
+
+### Create a shipment package (all items must be picked)
+POST {{host}}/api/fulfillment/shipments
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "orderId": 1,
+  "packageCode": "PKG-TEST-001",
+  "weightKg": 2.5
+}
+
+### Dispatch a shipment (requires carrier + tracking) (replace shipment id)
+PUT {{host}}/api/fulfillment/shipments/1/status
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "newStatus": "Dispatched",
+  "carrier": "UPS",
+  "trackingNumber": "1Z-TEST-123"
+}
+
+### Record a carrier event (idempotent)
+POST {{host}}/api/fulfillment/shipments/1/events
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "eventCode": "IN_TRANSIT",
+  "description": "Departed facility",
+  "eventUtc": "2026-10-26T12:00:00Z"
+}
+
+### Get shipment tracking
+GET {{host}}/api/fulfillment/shipments/1/tracking
+X-Api-Key: {{apiKey}}
+
+### Receive an approved return at a warehouse (replace return id)
+POST {{host}}/api/fulfillment/returns/receive
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "returnId": 2,
+  "warehouseId": 1
+}
+
+### Warehouse activity summary (cross-domain report)
+GET {{host}}/api/fulfillment/warehouses/activity-summary
+X-Api-Key: {{apiKey}}

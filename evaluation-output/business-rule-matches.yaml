@@ -1,0 +1,163 @@
+# Business Rule Matches — Stage 3
+# Scoring unit = one ground-truth rule (19 total).
+# Predictions: Stage 1 per-app rule catalogs (OD 20, CP 23, FA 24) are the primary rule source;
+# Stage 2 business-rule-comparison.yaml adds cross-app reconciliation (classification of divergences).
+# classification: exact | partial | incorrect | unmatched_ground_truth
+# exact requires matching PREDICATE + outcome + enforcement location, not just the name.
+version: 1
+evaluation_unit: ground_truth_rule
+ground_truth_file: benchmark/ground-truth/business-rules.yaml
+prediction_files:
+  - analysis-output/orderdesk/business-rules.yaml
+  - analysis-output/customerportal/business-rules.yaml
+  - analysis-output/fulfillmentapi/business-rules.yaml
+  - analysis-output/portfolio/business-rule-comparison.yaml
+
+matches:
+  - gt: RULE-QUOTE-EXPIRY
+    predicted: [OD-RULE-001]
+    classification: exact
+    predicate_match: true
+    note: Default 14-day validity; expiry blocks conversion. Matches.
+  - gt: RULE-DISCOUNT-THRESHOLD
+    predicted: [OD-RULE-003]
+    classification: exact
+    predicate_match: true
+    note: ">15% requires approval; at/below auto-approve. Exact threshold 15% captured."
+  - gt: RULE-QUOTE-CONVERT-APPROVED
+    predicted: [OD-RULE-005, OD-RULE-006]
+    classification: exact
+    predicate_match: true
+    note: Approved + non-expired + convert-once, enforced in both C# pre-check (005) and SQL 50011/50012/50013 (006). Dual-location correctly captured.
+  - gt: RULE-COMMISSION
+    predicted: [OD-RULE-009]
+    classification: exact
+    predicate_match: true
+    note: value*rate halved when discount>=20%. Exact formula + threshold captured (also noted as DUP-3 triplicate family via SQL + C# mirror).
+  - gt: RULE-MANDATORY-CUSTOMER-INFO
+    predicted: [OD-RULE-010, CP-RULE-010, "portfolio:RULE-MANDATORY-INFO"]
+    classification: exact
+    predicate_match: true
+    note: >
+      Email + shipping address required before order creation; GT marks location 'duplicated' across
+      SQL + OD C# + CP C#. Stage 1 OD-RULE-010 explicitly lists all three locations; Stage 2
+      RULE-MANDATORY-INFO classifies it 'equivalent' (duplicate). Fully captured incl. the duplication.
+  - gt: RULE-STAFF-CANCEL
+    predicted: [OD-RULE-014, OD-RULE-015]
+    classification: exact
+    predicate_match: true
+    note: Pending/Confirmed/Allocated eligible (014) + authorized override with audit (015). Both the base rule and override captured.
+  - gt: RULE-CUSTOMER-CANCEL
+    predicted: [CP-RULE-015]
+    classification: exact
+    predicate_match: true
+    note: Customer self-cancel Pending/Confirmed only (stricter). Matches; divergence vs staff captured in RULE-CANCEL.
+  - gt: RULE-COUPON-ELIGIBILITY
+    predicted: [CP-RULE-008]
+    classification: exact
+    predicate_match: true
+    note: active + not expired + min cart + required status + redemption cap. All five conditions captured verbatim.
+  - gt: RULE-RETURN-WINDOW
+    predicted: [CP-RULE-017]
+    classification: exact
+    predicate_match: true
+    note: Returns only for Delivered orders within 30 days. Exact (status + 30-day window).
+  - gt: RULE-TICKET-TRANSITIONS
+    predicted: [CP-RULE-021]
+    classification: exact
+    predicate_match: true
+    note: Valid ticket status-transition graph; Stage 1 even enumerates the allowed transitions.
+  - gt: RULE-CHECKOUT-IDEMPOTENT
+    predicted: [CP-RULE-009]
+    classification: exact
+    predicate_match: true
+    note: Idempotent on idempotency key + UQ_Orders_Idempotency constraint. Exact (C# + db-constraint).
+  - gt: RULE-INVENTORY-RECHECK
+    predicted: [CP-RULE-011]
+    classification: exact
+    predicate_match: true
+    note: Per-line availability recheck before checkout completes. Exact.
+  - gt: RULE-NO-OVER-ALLOCATION
+    predicted: [FA-RULE-003]
+    classification: exact
+    predicate_match: true
+    note: Cannot allocate beyond OnHand-Allocated; THROW 50022 + CK_Inventory_Alloc. Exact.
+  - gt: RULE-ALLOC-BLOCK-CANCELLED
+    predicted: [FA-RULE-004]
+    classification: exact
+    predicate_match: true
+    note: Cancelled orders cannot be allocated; THROW 50021 + FulfillmentRules.IsBlockedForFulfillment. Exact (SQL + C#).
+  - gt: RULE-PICK-AFTER-ALLOC
+    predicted: [FA-RULE-005]
+    classification: exact
+    predicate_match: true
+    note: Picking requires prior 'Allocated' allocation. Exact.
+  - gt: RULE-PACKAGE-AFTER-PICK
+    predicted: [FA-RULE-009]
+    classification: exact
+    predicate_match: true
+    note: All items picked before packaging (CanPackageShipment). Exact.
+  - gt: RULE-DISPATCH-REQUIRES-CARRIER
+    predicted: [FA-RULE-016]
+    classification: exact
+    predicate_match: true
+    note: Dispatch requires package + carrier + tracking (CanDispatch). Exact.
+  - gt: RULE-CARRIER-EVENT-IDEMPOTENT
+    predicted: [FA-RULE-018]
+    classification: exact
+    predicate_match: true
+    note: Idempotent on (ShipmentId,EventCode,EventUtc) + UQ_CarrierEvents. Exact.
+  - gt: RULE-RETURN-RECEIPT-NO-REFUND
+    predicted: [FA-RULE-019, FA-RULE-020, FA-RULE-021]
+    classification: exact
+    predicate_match: true
+    note: >
+      Approved-only (019), restock+no-refund (020), idempotent receipt (021). GT's single compound rule
+      is covered by three Stage 1 rules; counted once as exact (the "does NOT imply refund" nuance is
+      explicitly captured in FA-RULE-020).
+
+unmatched_ground_truth: []   # all 19 GT rules discovered
+
+# Rules predicted but with no distinct GT rule (not penalized against the GT rule denominator;
+# recorded for completeness / precision discussion).
+extra_predicted_rules_examples:
+  items:
+  - "OD-RULE-002 (quote lines editable only in Draft/PendingApproval)"
+  - "OD-RULE-012 (add existing product increments quantity)"
+  - "OD-RULE-013 (quote total formula)"
+  - "OD-RULE-016 (staff order requires >=1 line + valid agent/customer)"
+  - "OD-RULE-017 / CP-RULE-016 (cannot re-cancel a cancelled order)"
+  - "OD-RULE-019 (agent task status set)"
+  - "OD-RULE-020 (customer contact update requires email + UQ_Customers_Email)"
+  - "CP-RULE-002 (locked account cannot sign in)"
+  - "CP-RULE-006/007 (cart quantity rules)"
+  - "CP-RULE-012 (order total + coupon discount formula)"
+  - "CP-RULE-014 (record ownership authorization)"
+  - "CP-RULE-018 (one active return per order)"
+  - "CP-RULE-020 (no message on closed ticket)"
+  - "CP-RULE-023 (CSRF/antiforgery)"
+  - "FA-RULE-007 (one pick list per order)"
+  - "FA-RULE-008 (picked quantity bounds)"
+  - "FA-RULE-011 (unique package code)"
+  - "FA-RULE-012/013/014/017 (status roll-forward transitions)"
+  - "FA-RULE-015 (shipment transition graph)"
+  - "FA-RULE-022 (activity summary order classification)"
+  - "FA-RULE-023 (API key)"
+  - "FA-RULE-024 (centralized error mapping)"
+  note: >
+    These are finer-grained or infrastructure rules beyond the GT's curated business-rule set. They are
+    legitimate discoveries, not false positives in the business sense; most are genuine business/validation
+    rules (e.g. one-active-return, re-cancel guard). A few (API key, error mapping, CSRF) are
+    infrastructure/cross-cutting rather than business rules. Precision on the GT rule set is not reduced by
+    these because the GT rule catalog is explicitly a curated subset; they are reported as over-discovery.
+
+summary:
+  gt_rules: 19
+  exact: 19
+  partial: 0
+  incorrect: 0
+  unmatched_ground_truth: 0
+  behavioral_divergence_rules_correct:
+    - RULE-STAFF-CANCEL vs RULE-CUSTOMER-CANCEL (bounded Allocated divergence) correctly reconciled in portfolio RULE-CANCEL
+    - mandatory-info duplication correctly identified (DUP-1 family)
+    - commission dual-location (SQL authoritative + C# mirror) correctly identified

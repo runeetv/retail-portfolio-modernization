@@ -1,0 +1,557 @@
+# Functional Parity Matrix — LegacyRetailPortfolio consolidation (planning)
+# Exhaustive map: every source capability -> target feature/module + acceptance criteria + tests.
+# existing_tests reference the current suites; new_parity_tests are to be written before refactor.
+# verification_status: verified (behavior/source-verified upstream) | planned (parity test to add)
+# migration_risk: low | medium | high
+version: 1
+principle: "Parity is demonstrable by test: each capability keeps its verified behavior, proven by an existing or new test."
+existing_test_suites:
+  - tests/.../OrderDeskWorkflowTests.cs
+  - tests/.../OrderDeskRulesTests.cs
+  - tests/.../CustomerPortalWorkflowTests.cs
+  - tests/.../PortalRulesTests.cs
+  - tests/IntegrationTests/FulfillmentWorkflowTests.cs
+  - tests/.../FulfillmentRulesTests.cs
+  - tests/IntegrationTests/CrossAppWorkflowTests.cs
+
+rows:
+  # ---- OrderDesk ----
+  - cap: OD-CAP-001
+    target_feature: Staff customer search
+    target_module: MOD-CUSTOMER
+    required_behavior: Search by name/email, cap 200, staff-only.
+    acceptance: [Returns matches capped at 200; requires staff role.]
+    existing_tests: []
+    new_parity_tests: [Search_returns_capped_results; Search_requires_staff_role]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-002
+    target_feature: Staff full customer edit
+    target_module: MOD-CUSTOMER
+    required_behavior: Edit all contact+shipping; email required+unique.
+    acceptance: [Blank email rejected; duplicate email rejected (UQ_Customers_Email); all fields persist.]
+    existing_tests: []
+    new_parity_tests: [Staff_edit_persists_all_fields; Email_required_and_unique]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-003
+    target_feature: Staff catalog browse
+    target_module: MOD-CATALOG
+    required_behavior: Non-discontinued only; availability shown; cap 300.
+    acceptance: [Discontinued excluded; availability column present.]
+    existing_tests: []
+    new_parity_tests: [Catalog_excludes_discontinued_staff]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-004
+    target_feature: Pre-order availability check
+    target_module: MOD-CATALOG
+    required_behavior: Read-only OnHand-Allocated; no mutation.
+    acceptance: [Returns available qty; never writes Inventory.]
+    existing_tests: [OrderDeskRulesTests (availability)]
+    new_parity_tests: [Availability_check_is_read_only]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-005
+    target_feature: Create quote
+    target_module: MOD-QUOTING
+    required_behavior: Draft + number + 14d expiry.
+    acceptance: [ExpiresUtc = Created+14d default.]
+    existing_tests: [OrderDeskWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-006
+    target_feature: Quote lines
+    target_module: MOD-QUOTING
+    required_behavior: Merge-on-duplicate; edit only Draft/Pending; recompute totals.
+    acceptance: [Dup product merges qty; totals recomputed; edit blocked post-pending.]
+    existing_tests: [OrderDeskWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-007
+    target_feature: Apply discount + approval routing
+    target_module: MOD-QUOTING
+    required_behavior: ">15% -> PendingApproval; <=15% -> Approved."
+    acceptance: ["25% routes to pending; 10% auto-approves."]
+    existing_tests: [OrderDeskRulesTests, OrderDeskWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-008
+    target_feature: Decide discount approval
+    target_module: MOD-QUOTING
+    required_behavior: Decide once; quote Approved/Rejected; record agent/time/notes.
+    acceptance: [Re-decide blocked; quote status follows decision.]
+    existing_tests: [OrderDeskWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-009
+    target_feature: Convert quote to order
+    target_module: MOD-QUOTING
+    required_behavior: Approved+non-expired+not-converted via usp_ConvertQuoteToOrder; commission; mandatory-info.
+    acceptance: [Double-convert blocked (50011); not-approved (50012); expired (50013); missing info (50014); commission row written.]
+    existing_tests: ["OrderDeskWorkflowTests (double-convert, missing-info)"]
+    new_parity_tests: [Convert_writes_commission_once]
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: OD-CAP-010
+    target_feature: Staff order create (NEW web UI)
+    target_module: MOD-ORDER
+    required_behavior: Direct Confirmed order; validate info/agent/stock; OrderSource=OrderDesk.
+    acceptance: [Insufficient stock rejected; empty lines rejected; OrderSource='OrderDesk'.]
+    existing_tests: []
+    new_parity_tests: [Staff_order_rejects_insufficient_stock; Staff_order_stamps_source]
+    ambiguities: "No existing UI entry point (GAP-UI-1)."
+    migration_risk: medium
+    verification_status: verified
+  - cap: OD-CAP-011
+    target_feature: Staff order view (unrestricted)
+    target_module: MOD-ORDER
+    required_behavior: List/view any order + lines.
+    acceptance: [Staff sees any order; cap 200 on list.]
+    existing_tests: []
+    new_parity_tests: [Staff_order_view_unrestricted]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-012
+    target_feature: Staff cancel + override
+    target_module: MOD-ORDER
+    required_behavior: SQL eligibility (Pending/Confirmed/Allocated) + override w/ audit; no re-cancel.
+    acceptance: [Allocated cancellable by staff; override requires authorized agent + justification + audit row; already-cancelled rejected.]
+    existing_tests: [OrderDeskWorkflowTests (eligibility allows allocated; override writes audit)]
+    new_parity_tests: []
+    ambiguities: "Bounded divergence vs customer (RECON-CANCEL) pending stakeholder confirm."
+    migration_risk: medium
+    verification_status: verified
+  - cap: OD-CAP-013
+    target_feature: Returns review
+    target_module: MOD-RETURNS
+    required_behavior: Only 'Requested' reviewable -> Approved/Rejected; record agent/time.
+    acceptance: [Non-Requested rejected; status + reviewer persisted.]
+    existing_tests: [CrossAppWorkflowTests#WorkflowC]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-014
+    target_feature: Agent tasks board
+    target_module: MOD-SALESOPS
+    required_behavior: List active tasks; status in {Open,InProgress,Done,Cancelled}.
+    acceptance: [Invalid status rejected.]
+    existing_tests: []
+    new_parity_tests: [Task_status_set_enforced]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-015
+    target_feature: Commission view
+    target_module: MOD-SALESOPS
+    required_behavior: Read-only recent commissions cap 100.
+    acceptance: [Shows commissions for agent; read-only.]
+    existing_tests: [OrderDeskRulesTests (CalculateCommission)]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: OD-CAP-016
+    target_feature: Staff shipment lookup
+    target_module: MOD-SHIPMENT
+    required_behavior: Read-only shipment status for an order.
+    acceptance: [No write path; reads FulfillmentAPI-owned data.]
+    existing_tests: [CrossAppWorkflowTests#shipment_visibility]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+
+  # ---- CustomerPortal ----
+  - cap: CP-CAP-001
+    target_feature: Customer login
+    target_module: MOD-IDENTITY
+    required_behavior: PBKDF2 verify; lock check; cookie principal.
+    acceptance: [Wrong password rejected; locked account rejected; LastLoginUtc set on success.]
+    existing_tests: [PortalRulesTests/CustomerPortalWorkflowTests]
+    new_parity_tests: [Locked_account_cannot_login]
+    ambiguities: "Stage 3: Stage 2 under-surfaced auth as capability — ensure first-class in target."
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-002
+    target_feature: Logout
+    target_module: MOD-IDENTITY
+    required_behavior: Clear cookie.
+    acceptance: [Session cleared.]
+    existing_tests: []
+    new_parity_tests: [Logout_clears_session]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-003
+    target_feature: Profile self-service
+    target_module: MOD-CUSTOMER
+    required_behavior: Edit ONLY phone+shipping; never name/email/status.
+    acceptance: [Attempt to change name/email/status is ignored/blocked; phone+shipping persist.]
+    existing_tests: []
+    new_parity_tests: [Self_service_cannot_edit_restricted_fields]
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: CP-CAP-004
+    target_feature: Public catalog browse
+    target_module: MOD-CATALOG
+    required_behavior: Anonymous; non-discontinued; category filter; cap 200.
+    acceptance: [Anonymous allowed; discontinued excluded.]
+    existing_tests: [CustomerPortalWorkflowTests]
+    new_parity_tests: [Catalog_anonymous_allowed]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-005
+    target_feature: Product detail + display availability
+    target_module: MOD-CATALOG
+    required_behavior: Display-only availability; authoritative recheck at checkout.
+    acceptance: [Availability shown; not authoritative.]
+    existing_tests: []
+    new_parity_tests: [Detail_shows_display_availability]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-006
+    target_feature: Cart
+    target_module: MOD-SHOPPING
+    required_behavior: Add merges; qty<=0 removes; one active cart.
+    acceptance: [Dup add merges; qty 0 removes line.]
+    existing_tests: [CustomerPortalWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-007
+    target_feature: Apply coupon
+    target_module: MOD-SHOPPING
+    required_behavior: Five-part eligibility (active/expiry/min/status/cap); store code only.
+    acceptance: [Each ineligibility reason returned; eligible stores code.]
+    existing_tests: [PortalRulesTests.EvaluateCoupon, CustomerPortalWorkflowTests (coupon)]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-008
+    target_feature: Remove coupon
+    target_module: MOD-SHOPPING
+    required_behavior: Clear coupon from cart.
+    acceptance: [Coupon cleared.]
+    existing_tests: []
+    new_parity_tests: [Remove_coupon_clears]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-009
+    target_feature: Checkout
+    target_module: MOD-ORDER
+    required_behavior: Idempotent; recheck inventory; coupon discount+redemption; OrderSource=CustomerPortal; mandatory-info.
+    acceptance: [Repeat key returns same order; short stock blocks; coupon redemption recorded; missing profile info blocks.]
+    existing_tests: ["CustomerPortalWorkflowTests.Checkout_* (idempotent, recheck, coupon)"]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: CP-CAP-010
+    target_feature: Customer order history
+    target_module: MOD-ORDER
+    required_behavior: Own orders only (ownership); CanCancel/CanReturn flags; tracking.
+    acceptance: [Cannot view another customer's order; flags correct.]
+    existing_tests: [CustomerPortalWorkflowTests (ownership)]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: CP-CAP-011
+    target_feature: Customer self-cancel
+    target_module: MOD-ORDER
+    required_behavior: Pending/Confirmed only; ownership; no re-cancel.
+    acceptance: [Allocated NOT customer-cancellable; another customer's order rejected; already-cancelled rejected.]
+    existing_tests: [PortalRulesTests, "CustomerPortalWorkflowTests (blocks_allocated, ownership)"]
+    new_parity_tests: []
+    ambiguities: "Bounded divergence vs staff (RECON-CANCEL)."
+    migration_risk: medium
+    verification_status: verified
+  - cap: CP-CAP-012
+    target_feature: Request return
+    target_module: MOD-RETURNS
+    required_behavior: Delivered + within 30d; copy lines; block 2nd active.
+    acceptance: [Non-delivered/late rejected; second active return blocked.]
+    existing_tests: [PortalRulesTests.CanRequestReturn, CustomerPortalWorkflowTests]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-013
+    target_feature: Customer returns list
+    target_module: MOD-RETURNS
+    required_behavior: Own returns only.
+    acceptance: [Ownership-filtered.]
+    existing_tests: []
+    new_parity_tests: [Returns_list_ownership]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-014
+    target_feature: Customer tracking (friendly)
+    target_module: MOD-SHIPMENT
+    required_behavior: FriendlyStatus; ownership-checked; read-only.
+    acceptance: [Another customer's tracking blocked; friendly labels mapped.]
+    existing_tests: [CrossAppWorkflowTests#shipment_visibility]
+    new_parity_tests: [Friendly_status_mapping]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-015
+    target_feature: Support ticket create/list
+    target_module: MOD-SUPPORT
+    required_behavior: Subject required; Open + initial message; ownership.
+    acceptance: [Blank subject rejected; ticket Open with message.]
+    existing_tests: []
+    new_parity_tests: [Ticket_requires_subject]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-016
+    target_feature: Ticket reply
+    target_module: MOD-SUPPORT
+    required_behavior: No reply on Closed.
+    acceptance: [Closed ticket reply rejected.]
+    existing_tests: []
+    new_parity_tests: [No_reply_on_closed]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-017
+    target_feature: Ticket status change
+    target_module: MOD-SUPPORT
+    required_behavior: Validated transition graph.
+    acceptance: [Invalid transition rejected.]
+    existing_tests: [PortalRulesTests.IsValidTicketTransition]
+    new_parity_tests: []
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: CP-CAP-018
+    target_feature: Wishlist
+    target_module: MOD-SHOPPING
+    required_behavior: Add dedupes; product must exist.
+    acceptance: [Dup add is no-op.]
+    existing_tests: []
+    new_parity_tests: [Wishlist_dedupes]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+
+  # ---- FulfillmentAPI (API parity via contract tests) ----
+  - cap: FA-CAP-001
+    target_feature: Pending/specific orders (API + work queue)
+    target_module: MOD-FULFILLMENT
+    required_behavior: Confirmed|Allocated filter cap 200; single order.
+    acceptance: [Only Confirmed/Allocated returned; 404 for unknown.]
+    existing_tests: [FulfillmentWorkflowTests]
+    new_parity_tests: [API-ORD-PENDING contract test; API-ORD-GET contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-002
+    target_feature: Availability API
+    target_module: MOD-FULFILLMENT
+    required_behavior: 4-field response; Available=OnHand-Allocated.
+    acceptance: [Response shape frozen; 404 when no row.]
+    existing_tests: []
+    new_parity_tests: [API-INV-AVAIL contract test (field names/casing)]
+    ambiguities: "OPEN-Q-RESP-SHAPE (JSON casing part of contract?)."
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-003
+    target_feature: Allocate API
+    target_module: MOD-FULFILLMENT
+    required_behavior: usp_AllocateInventory; roll to Allocated; block cancelled(50021)/over-alloc(50022); idempotent.
+    acceptance: [Cancelled->409; over-alloc->409; repeat idempotent; order Allocated.]
+    existing_tests: [FulfillmentWorkflowTests.Allocation_* ]
+    new_parity_tests: [API-INV-ALLOCATE contract test]
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: FA-CAP-004
+    target_feature: Create pick list API
+    target_module: MOD-FULFILLMENT
+    required_behavior: Requires allocation; blocked cancelled; one per order; bin round-robin.
+    acceptance: [No alloc->409; dup->409; items generated.]
+    existing_tests: [FulfillmentWorkflowTests.Picking_requires_prior_allocation]
+    new_parity_tests: [API-PICK-CREATE contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-005
+    target_feature: Mark picked API
+    target_module: MOD-FULFILLMENT
+    required_behavior: Qty 0..toPick; roll Allocated->Picking.
+    acceptance: [Out of range->400; order moves to Picking.]
+    existing_tests: [FulfillmentWorkflowTests (Full_warehouse_flow)]
+    new_parity_tests: [API-PICK-ITEM contract test]
+    ambiguities: "Stage 1 GAP-002 on Picking roll expression — verify during impl."
+    migration_risk: medium
+    verification_status: verified
+  - cap: FA-CAP-006
+    target_feature: Create shipment package API
+    target_module: MOD-SHIPMENT
+    required_behavior: All picked; unique code; ->Packed.
+    acceptance: [Not all picked->409; dup code->409; order Packed.]
+    existing_tests: [FulfillmentWorkflowTests (Full_warehouse_flow)]
+    new_parity_tests: [API-SHIP-CREATE contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-007
+    target_feature: Update shipment status/dispatch API
+    target_module: MOD-SHIPMENT
+    required_behavior: Transition graph; dispatch needs package+carrier+tracking; roll order Shipped/Delivered.
+    acceptance: [Invalid transition->409; dispatch w/o carrier->409; order rolls forward.]
+    existing_tests: [FulfillmentRulesTests, FulfillmentWorkflowTests (dispatch)]
+    new_parity_tests: [API-SHIP-STATUS contract test]
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: FA-CAP-008
+    target_feature: Carrier event API (idempotent)
+    target_module: MOD-SHIPMENT
+    required_behavior: Dedupe on (ShipmentId,EventCode,EventUtc).
+    acceptance: [Repeat returns same row; unknown shipment->404.]
+    existing_tests: [FulfillmentWorkflowTests.Carrier_events_are_idempotent]
+    new_parity_tests: [API-SHIP-EVENT contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-009
+    target_feature: Shipment tracking API
+    target_module: MOD-SHIPMENT
+    required_behavior: Packages+events; by-order list.
+    acceptance: [Shape frozen.]
+    existing_tests: []
+    new_parity_tests: [API-SHIP-TRACKING/BYORDER contract tests]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-010
+    target_feature: Return receipt API
+    target_module: MOD-RETURNS
+    required_behavior: Approved-only(50031); restock; idempotent; no refund; ->Received.
+    acceptance: [Non-approved->409; restock OnHand; repeat no double restock.]
+    existing_tests: [FulfillmentWorkflowTests.Return_receipt_*, CrossAppWorkflowTests#WorkflowC]
+    new_parity_tests: [API-RET-RECEIVE contract test]
+    ambiguities: none
+    migration_risk: medium
+    verification_status: verified
+  - cap: FA-CAP-011
+    target_feature: Receipt adjustments API
+    target_module: MOD-RETURNS
+    required_behavior: List adjustments for receipt.
+    acceptance: [Returns adjustments.]
+    existing_tests: []
+    new_parity_tests: [API-RET-ADJ contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-012
+    target_feature: Warehouses API
+    target_module: MOD-FULFILLMENT
+    required_behavior: Active only.
+    acceptance: [Inactive excluded.]
+    existing_tests: []
+    new_parity_tests: [API-WH-LIST contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+  - cap: FA-CAP-013
+    target_feature: Activity summary API
+    target_module: MOD-REPORTING
+    required_behavior: usp_WarehouseActivitySummary; staff vs web by OrderSource.
+    acceptance: [Optional warehouse filter; counts by OrderSource.]
+    existing_tests: []
+    new_parity_tests: [API-WH-ACTIVITY contract test]
+    ambiguities: none
+    migration_risk: low
+    verification_status: verified
+
+cross_cutting_rows:
+  - item: X-Api-Key auth on legacy API routes (FA-RULE-023)
+    target_module: MOD-PLATFORM
+    acceptance: ["Missing/invalid key -> 401 {error}; exempt paths bypass."]
+    new_parity_tests: [ApiKey_required_on_fulfillment_routes; Exempt_paths_bypass]
+    migration_risk: medium
+    ambiguities: "OPEN-Q-SEC production auth."
+    verification_status: verified
+  - item: Error mapping (FA-RULE-024)
+    target_module: MOD-PLATFORM
+    acceptance: ["404/409/400 {error}; 500 problem+json."]
+    new_parity_tests: [Error_shapes_preserved]
+    migration_risk: low
+    verification_status: verified
+  - item: Record ownership (CP-RULE-014)
+    target_module: MOD-PLATFORM
+    acceptance: [Customer cannot read/act on others' records across orders/returns/tickets/wishlist/profile/tracking.]
+    existing_tests: [CustomerPortalWorkflowTests.Ownership_enforced]
+    new_parity_tests: [Ownership_enforced_all_resources]
+    migration_risk: medium
+    verification_status: verified
+  - item: Antiforgery/CSRF (CP-RULE-023)
+    target_module: MOD-PLATFORM
+    acceptance: [State-changing web POST without token rejected.]
+    new_parity_tests: [Antiforgery_required_on_post]
+    migration_risk: low
+    verification_status: verified
+
+cross_app_workflow_parity:
+  - wf: WF-A
+    acceptance: [Quote->order (OrderDesk) then allocate/pick/pack/ship (warehouse) over same Orders row.]
+    existing_tests: [CrossAppWorkflowTests#WorkflowA]
+    status: verified
+  - wf: WF-B
+    acceptance: [Checkout->fulfill->customer tracking.]
+    existing_tests: [CrossAppWorkflowTests#shipment_visibility + per-app]
+    new_parity_tests: [Checkout_to_tracking_end_to_end (closes Stage 3 H-1 gap)]
+    status: planned
+  - wf: WF-C
+    acceptance: [Request->approve->receive+restock.]
+    existing_tests: [CrossAppWorkflowTests#WorkflowC]
+    status: verified
+  - wf: WF-D
+    acceptance: [Cancel (staff/customer) -> allocation blocked (50021).]
+    existing_tests: [CrossAppWorkflowTests#WorkflowD]
+    status: verified
+  - wf: WF-E
+    acceptance: [Warehouse allocate->pick->pack->dispatch.]
+    existing_tests: [FulfillmentWorkflowTests.Full_warehouse_flow]
+    status: verified
+
+missing_from_initial_design:
+  - none_for_capabilities: "All 47 capabilities + 5 workflows have a target feature/module."
+  - note: >
+      Two items are additive (not missing parity): a web UI for OD-CAP-010 (GAP-UI-1) and a warehouse
+      web UI (OPEN-Q-WH-UI). Neither removes existing behavior; both are new surfaces over preserved logic.
+
+summary:
+  capability_rows: 47
+  verified: 47
+  planned_new_parity_tests: true
+  workflows: 5
+  uncovered_capabilities: 0
+  highest_risk_items: [OD-CAP-009/FA-CAP-003/FA-CAP-010 (stored-proc transaction parity), FA-CAP-005 (GAP-002), API contract freeze (OPEN-Q-CONSUMERS)]

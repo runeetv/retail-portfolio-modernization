@@ -1,0 +1,28 @@
+@model CustomerPortal.Domain.Wishlist
+@{
+    ViewData["Title"] = "Wishlist";
+}
+<h1>@Model.Name</h1>
+@if (Model.Items.Count == 0) { <p>Your wishlist is empty.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Product</th><th>Price</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var i in Model.Items)
+        {
+            <tr>
+                <td>@(i.Product?.Name ?? ("#" + i.ProductId))</td>
+                <td>@((i.Product?.UnitPrice ?? 0).ToString("C"))</td>
+                <td>
+                    <form class="inline" method="post" asp-action="Remove">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="productId" value="@i.ProductId" />
+                        <button class="btn secondary" type="submit">Remove</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

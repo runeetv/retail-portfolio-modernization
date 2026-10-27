@@ -1,0 +1,14 @@
+@{
+    ViewData["Title"] = "Home";
+}
+<h1>UnifiedRetail</h1>
+<p>Consolidated retail application (OrderDesk + CustomerPortal + FulfillmentAPI) on the existing LegacyRetailDB.</p>
+<div class="card">
+    <h3>Surfaces</h3>
+    <ul>
+        <li><a asp-controller="Catalog" asp-action="Index">Customer storefront</a> — catalog, cart, checkout, orders, returns, tracking, support, wishlist.</li>
+        <li><a asp-area="Staff" asp-controller="Home" asp-action="Index">Staff area</a> — customers, quotes, approvals, orders, returns review, agent tasks.</li>
+        <li><a asp-area="Warehouse" asp-controller="Home" asp-action="Index">Warehouse area</a> — allocation, picking, packaging, dispatch, receipts, reports.</li>
+        <li><a href="/swagger">FulfillmentAPI (compat)</a> — preserved <code>/api/fulfillment/*</code> endpoints (X-Api-Key).</li>
+    </ul>
+</div>

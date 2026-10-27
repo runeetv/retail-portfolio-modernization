@@ -1,0 +1,80 @@
+# Cross-App Dependency Evaluation — Stage 3
+# Scoring unit = one ground-truth dependency fact (cross_app_db_dependencies edges + stored procs + shared_code).
+# Direction is evaluated, not just existence. Incorrect vs missing tracked separately.
+version: 1
+evaluation_unit: ground_truth_dependency_fact
+ground_truth_file: benchmark/ground-truth/dependencies.yaml
+prediction_file: analysis-output/portfolio/cross-app-dependencies.yaml
+
+shared_code:
+  gt: LegacyRetail.Common is infrastructure-only (DbConnectionConfig + PasswordHasher), no business logic/entities.
+  predicted: "integration_style.shared_code states exactly this (LegacyRetail.Common only ... infrastructure, no business logic/entities)."
+  result: exact
+
+cross_app_db_dependencies:
+  - gt: "APP-ORDERDESK reads Shipments (owner APP-FULFILL) via OrderService.GetShipmentsAsync"
+    predicted: DEP-SHIPMENT-READ
+    direction_match: true
+    result: exact
+  - gt: "APP-PORTAL reads Shipments + CarrierEvents (owner APP-FULFILL) via TrackingService"
+    predicted: DEP-SHIPMENT-READ
+    direction_match: true
+    result: exact
+  - gt: "APP-FULFILL reads Customers (shipping) + Orders + OrderLines (shared/produced by OD+CP)"
+    predicted: [DEP-ORDER-HANDOFF, DEP-REPORT-JOIN]
+    direction_match: true
+    result: exact
+    note: Order read-as-work-queue = DEP-ORDER-HANDOFF; Customers read = inside DEP-REPORT-JOIN (report).
+  - gt: "APP-FULFILL writes Inventory (restock) + Returns.ReturnStatus->Received (return created by CP, approved by OD)"
+    predicted: [DEP-INVENTORY-SHARED, DEP-RETURN-CHAIN]
+    direction_match: true
+    result: exact
+  - gt: "APP-ORDERDESK writes Returns.ReturnStatus->Approved/Rejected (row created by CP)"
+    predicted: DEP-RETURN-CHAIN
+    direction_match: true
+    result: exact
+
+stored_procedures:
+  - gt: usp_ConvertQuoteToOrder (OD) touches SalesQuotes,SalesQuoteLines,Orders,OrderLines,SalesCommissions,Customers,SalesAgents
+    predicted: DEP-COMMISSION-WRITE + capability OD-CAP-009
+    result: exact
+    note: Prediction identifies it writes shared Orders + OD-owned SalesCommissions in one tx.
+  - gt: usp_EvaluateCancellationEligibility (OD) touches Orders
+    predicted: captured in OVL-CANCEL / RULE-CANCEL (not a separate DEP edge)
+    result: partial
+    note: Recognized as OrderDesk's SQL cancellation rule; not framed as a cross-app dependency (correct — it is intra-OD).
+  - gt: usp_AllocateInventory (FA) touches Orders,OrderLines,Inventory,InventoryAllocations
+    predicted: DEP-ORDER-HANDOFF + DEP-INVENTORY-SHARED + DEP-CANCEL-GUARD
+    result: exact
+  - gt: usp_ReceiveReturnAndAdjust (FA) touches Returns,ReturnLines,ReturnReceipts,Inventory,WarehouseAdjustments
+    predicted: DEP-RETURN-CHAIN + DEP-INVENTORY-SHARED
+    result: exact
+  - gt: usp_WarehouseActivitySummary (FA) joins Warehouses,PickLists,InventoryAllocations,Orders,Shipments,Customers,SalesAgents (cross-domain)
+    predicted: DEP-REPORT-JOIN
+    result: exact
+    note: >
+      Correctly identified as the single cross-domain read reaching OrderDesk-owned SalesAgents via
+      Orders.PlacedByAgentId; correctly NOT inferred as a functional dependency on OrderDesk code.
+
+integration_style_correctness:
+  gt: data-mediated via shared DB; no direct code/API calls between apps.
+  predicted: "integration_style.direct_calls_between_apps = none observed; notes reiterate shared-schema-only coupling."
+  result: exact
+  note: >
+    Matches the ground truth's core architectural fact. Prediction also adds an explicit guard
+    ("shared DB access is NOT treated as a functional dependency unless a concrete handoff was traced"),
+    which is exactly the discipline the benchmark rewards.
+
+incorrect_dependencies: []   # no fabricated cross-app code/API dependency asserted
+missing_dependencies: []     # all GT cross-app edges + procs represented
+
+extra_predicted_dependencies:
+  - id: DEP-CANCEL-GUARD
+    note: "Cancellation-by-one-app blocks allocation-in-another via Orders.Status + THROW 50021. A real, correctly-directed data guard; consistent with GT WF-D. Not a false positive."
+
+summary:
+  shared_code: exact
+  cross_app_edges: { gt: 5, exact: 5, partial: 0, missing: 0, incorrect: 0 }
+  stored_procs: { gt: 5, exact: 4, partial: 1, missing: 0 }
+  direction_accuracy: 10/10 correctly directed
+  integration_style: exact

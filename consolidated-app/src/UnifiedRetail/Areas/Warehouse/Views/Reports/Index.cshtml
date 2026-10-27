@@ -1,0 +1,18 @@
+@model List<FulfillmentAPI.Application.WarehouseActivityRow>
+@{
+    ViewData["Title"] = "Activity report";
+}
+<h1>Warehouse activity summary</h1>
+<p style="color:#64748b;font-size:13px">Cross-domain report (usp_WarehouseActivitySummary): staff vs web orders by OrderSource.</p>
+<table>
+    <thead><tr><th>Warehouse</th><th>PickLists</th><th>Shipments</th><th>Allocations</th><th>Orders</th><th>Staff</th><th>Web</th><th>Customers</th><th>Agents</th></tr></thead>
+    <tbody>
+    @foreach (var r in Model)
+    {
+        <tr>
+            <td>@r.WarehouseName</td><td>@r.PickLists</td><td>@r.Shipments</td><td>@r.Allocations</td>
+            <td>@r.OrdersTouched</td><td>@r.StaffOrders</td><td>@r.WebOrders</td><td>@r.DistinctCustomers</td><td>@r.DistinctAgents</td>
+        </tr>
+    }
+    </tbody>
+</table>

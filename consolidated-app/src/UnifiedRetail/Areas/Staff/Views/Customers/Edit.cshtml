@@ -1,0 +1,21 @@
+@model OrderDesk.Domain.Customer
+@{
+    ViewData["Title"] = "Edit customer";
+}
+<h1>Edit @Model.FullName</h1>
+<div class="card" style="max-width:560px">
+    <form method="post">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="CustomerId" value="@Model.CustomerId" />
+        <p><label>First name<br /><input name="FirstName" value="@Model.FirstName" /></label></p>
+        <p><label>Last name<br /><input name="LastName" value="@Model.LastName" /></label></p>
+        <p><label>Email (required)<br /><input name="Email" value="@Model.Email" required /></label></p>
+        <p><label>Phone<br /><input name="Phone" value="@Model.Phone" /></label></p>
+        <p><label>Address<br /><input name="ShipAddressLine" value="@Model.ShipAddressLine" /></label></p>
+        <p><label>City<br /><input name="ShipCity" value="@Model.ShipCity" /></label></p>
+        <p><label>Region<br /><input name="ShipRegion" value="@Model.ShipRegion" /></label></p>
+        <p><label>Postal<br /><input name="ShipPostalCode" value="@Model.ShipPostalCode" /></label></p>
+        <p><label>Country<br /><input name="ShipCountry" value="@Model.ShipCountry" /></label></p>
+        <button class="btn" type="submit">Save</button>
+    </form>
+</div>

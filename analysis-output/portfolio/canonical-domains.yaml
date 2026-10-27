@@ -1,0 +1,417 @@
+# LegacyRetailPortfolio — Canonical Business Domains & Entity Mapping (Stage 2)
+# Maps each app's Stage 1 entities to canonical business concepts, distinguishing:
+#  - same entity via different app models   - distinct entities with similar names
+#  - app-owned vs shared database structures - cross-domain relationships
+# verification: static_verified (DbContext ToTable + DDL inspected) unless noted.
+version: 1
+
+canonical_domains:
+  - id: PF-DOM-CUSTOMER
+    name: Customer & Account
+    description: The person/organization the business sells to, plus the portal login identity.
+    owning_apps: [APP-ORDERDESK (contact edit), APP-PORTAL (identity + self-service)]
+    canonical_entities: [CE-CUSTOMER, CE-CUSTOMER-ACCOUNT, CE-CUSTOMER-PREFERENCE]
+
+  - id: PF-DOM-CATALOG
+    name: Product Catalog & Inventory
+    description: Sellable products, categories, and stock positions.
+    owning_apps: [shared-read; inventory written by APP-FULFILL]
+    canonical_entities: [CE-PRODUCT, CE-CATEGORY, CE-INVENTORY]
+
+  - id: PF-DOM-QUOTING
+    name: Sales Quotation & Discount
+    description: Quotations, discount approvals, and the commission earned on conversion.
+    owning_apps: [APP-ORDERDESK]
+    canonical_entities: [CE-SALES-QUOTE, CE-SALES-QUOTE-LINE, CE-DISCOUNT-APPROVAL, CE-SALES-COMMISSION]
+
+  - id: PF-DOM-ORDER
+    name: Order Capture & Lifecycle
+    description: The sales order and its lines; status advances across capture, fulfillment, cancellation.
+    owning_apps: [APP-ORDERDESK + APP-PORTAL create; APP-FULFILL advances fulfillment status]
+    canonical_entities: [CE-ORDER, CE-ORDER-LINE]
+
+  - id: PF-DOM-FULFILL
+    name: Warehouse Fulfillment
+    description: Allocation, pick lists, warehouses, bins, adjustments.
+    owning_apps: [APP-FULFILL]
+    canonical_entities: [CE-WAREHOUSE, CE-WAREHOUSE-BIN, CE-INVENTORY-ALLOCATION, CE-PICKLIST, CE-PICKLIST-ITEM, CE-WAREHOUSE-ADJUSTMENT]
+
+  - id: PF-DOM-SHIPMENT
+    name: Shipment & Tracking
+    description: Outbound shipments, packages, and carrier events.
+    owning_apps: [APP-FULFILL (writer); APP-PORTAL + APP-ORDERDESK (readers)]
+    canonical_entities: [CE-SHIPMENT, CE-SHIPMENT-PACKAGE, CE-CARRIER-EVENT]
+
+  - id: PF-DOM-RETURNS
+    name: Returns
+    description: The return request and its lifecycle plus the warehouse receipt.
+    owning_apps: [APP-PORTAL (create) -> APP-ORDERDESK (review) -> APP-FULFILL (receipt)]
+    canonical_entities: [CE-RETURN, CE-RETURN-LINE, CE-RETURN-RECEIPT]
+
+  - id: PF-DOM-SHOPPING
+    name: Shopping Experience
+    description: Cart, coupons, redemptions, and wishlist (customer-facing commerce).
+    owning_apps: [APP-PORTAL]
+    canonical_entities: [CE-CART, CE-CART-ITEM, CE-COUPON, CE-COUPON-REDEMPTION, CE-WISHLIST, CE-WISHLIST-ITEM]
+
+  - id: PF-DOM-SUPPORT
+    name: Customer Support
+    description: Support tickets and their message threads.
+    owning_apps: [APP-PORTAL]
+    canonical_entities: [CE-SUPPORT-TICKET, CE-SUPPORT-TICKET-MESSAGE]
+
+  - id: PF-DOM-SALESOPS
+    name: Sales-Agent Operations
+    description: Sales agents, their tasks, and cancellation-override audit.
+    owning_apps: [APP-ORDERDESK]
+    canonical_entities: [CE-SALES-AGENT, CE-SALES-AGENT-TASK, CE-CANCELLATION-OVERRIDE]
+
+canonical_entities:
+  # ===== Shared tables with MULTIPLE app models (same business entity, different C# shapes) =====
+  - id: CE-ORDER
+    name: Order
+    physical_table: dbo.Orders
+    kind: shared_table_multi_model
+    description: One business order concept represented by three distinct C# models (intentional naming divergence).
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.Order, stage1: OD-ENT-011, access: "read/write (create Confirmed, cancel)" }
+      APP-PORTAL:    { class: CustomerPortal.Domain.CustomerOrder, stage1: CP-ENT-009, access: "read/write (checkout create, self-cancel)" }
+      APP-FULFILL:   { class: FulfillmentAPI.Domain.FulfillmentOrder, stage1: FA-ENT-003, access: "read + status roll-forward" }
+    verification: static_verified
+    evidence: "DbContext ToTable(\"Orders\") in all three Infrastructure projects"
+
+  - id: CE-ORDER-LINE
+    name: Order line
+    physical_table: dbo.OrderLines
+    kind: shared_table_multi_model
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.OrderLine, stage1: OD-ENT-012 }
+      APP-PORTAL:    { class: CustomerPortal.Domain.CustomerOrderLine, stage1: CP-ENT-010 }
+      APP-FULFILL:   { class: FulfillmentAPI.Domain.FulfillmentOrderLine, stage1: FA-ENT-004 }
+    verification: static_verified
+
+  - id: CE-CUSTOMER
+    name: Customer
+    physical_table: dbo.Customers
+    kind: shared_table_multi_model
+    description: The customer record, modeled differently by OrderDesk and CustomerPortal (CustomerPortal also has a separate login identity related 1:1).
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.Customer, stage1: OD-ENT-001, access: "read/write (full contact edit)" }
+      APP-PORTAL:    { class: CustomerPortal.Domain.ShopperProfile, stage1: CP-ENT-002, access: "read/write (self-service subset)" }
+      APP-FULFILL:   { class: "(none; read only inside usp_WarehouseActivitySummary)", access: read }
+    related_entity: CE-CUSTOMER-ACCOUNT
+    verification: static_verified
+
+  - id: CE-INVENTORY
+    name: Inventory / stock position
+    physical_table: dbo.Inventory
+    kind: shared_table_multi_model
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.InventoryItem, stage1: OD-ENT-004, access: read }
+      APP-PORTAL:    { class: CustomerPortal.Domain.StockLevel, stage1: CP-ENT-006, access: read }
+      APP-FULFILL:   { class: FulfillmentAPI.Domain.StockRecord, stage1: FA-ENT-005, access: "read/write (allocate + restock)" }
+    verification: static_verified
+    note: All three expose a computed Available = QuantityOnHand - QuantityAllocated (expression-level duplicate DUP-AVAIL).
+
+  - id: CE-RETURN
+    name: Return
+    physical_table: dbo.Returns
+    kind: shared_table_multi_model
+    description: One return concept with three narrow app models, each owning a distinct lifecycle stage.
+    app_models:
+      APP-PORTAL:    { class: CustomerPortal.Domain.CustomerReturn, stage1: CP-ENT-013, access: "create (Requested) + read" }
+      APP-ORDERDESK: { class: OrderDesk.Domain.ReturnRequest, stage1: OD-ENT-014, access: "read + review (Approved/Rejected)" }
+      APP-FULFILL:   { class: FulfillmentAPI.Domain.ReturnForReceipt, stage1: FA-ENT-012, access: "read + status Received via proc" }
+    verification: static_verified
+
+  - id: CE-RETURN-LINE
+    name: Return line
+    physical_table: dbo.ReturnLines
+    kind: shared_table
+    app_models:
+      APP-PORTAL:  { class: CustomerPortal.Domain.CustomerReturnLine, stage1: CP-ENT-014, access: write (on create) }
+      APP-FULFILL: { class: "(no C# entity; read inside usp_ReceiveReturnAndAdjust)", access: read }
+    verification: static_verified
+
+  - id: CE-SHIPMENT
+    name: Shipment
+    physical_table: dbo.Shipments
+    kind: shared_table_multi_model
+    description: Owned/written by FulfillmentAPI; read via distinct read-model classes by the other two apps.
+    app_models:
+      APP-FULFILL:   { class: FulfillmentAPI.Domain.Shipment, stage1: FA-ENT-009, access: "read/write (owner)" }
+      APP-PORTAL:    { class: CustomerPortal.Domain.TrackedShipment, stage1: CP-ENT-015, access: "read-only" }
+      APP-ORDERDESK: { class: OrderDesk.Domain.ShipmentStatusView, stage1: OD-ENT-015, access: "read-only" }
+    verification: static_verified
+
+  - id: CE-CARRIER-EVENT
+    name: Carrier tracking event
+    physical_table: dbo.CarrierEvents
+    kind: shared_table_multi_model
+    app_models:
+      APP-FULFILL: { class: FulfillmentAPI.Domain.CarrierEvent, stage1: FA-ENT-011, access: "read/write (owner)" }
+      APP-PORTAL:  { class: CustomerPortal.Domain.TrackingEvent, stage1: CP-ENT-016, access: "read-only" }
+    verification: static_verified
+
+  - id: CE-PRODUCT
+    name: Product
+    physical_table: dbo.Products
+    kind: shared_table_multi_model
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.Product, stage1: OD-ENT-002, access: read }
+      APP-PORTAL:    { class: CustomerPortal.Domain.CatalogProduct, stage1: CP-ENT-004, access: read }
+      APP-FULFILL:   { class: "(FK target only)", access: read }
+    verification: static_verified
+
+  - id: CE-CATEGORY
+    name: Product category
+    physical_table: dbo.ProductCategories
+    kind: shared_table
+    app_models:
+      APP-ORDERDESK: { class: OrderDesk.Domain.ProductCategory, stage1: OD-ENT-003, access: read }
+      APP-PORTAL:    { class: CustomerPortal.Domain.Category, stage1: CP-ENT-005, access: read }
+    verification: static_verified
+
+  # ===== Related-but-distinct identity entity (NOT the same as CE-CUSTOMER) =====
+  - id: CE-CUSTOMER-ACCOUNT
+    name: Customer account (portal login)
+    physical_table: dbo.CustomerAccounts
+    kind: app_owned
+    owning_app: APP-PORTAL
+    description: >
+      A DISTINCT entity from CE-CUSTOMER: the portal login identity (username/password hash), related
+      1:1 to dbo.Customers via CustomerId. Not to be collapsed into CE-CUSTOMER — different table,
+      different responsibility (authentication), owned solely by CustomerPortal.
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.CustomerAccount, stage1: CP-ENT-001 } }
+    relationship_to: { CE-CUSTOMER: "1:1 via CustomerId" }
+    verification: static_verified
+
+  # ===== App-owned entities (no cross-app model) =====
+  - id: CE-CUSTOMER-PREFERENCE
+    name: Customer preference
+    physical_table: dbo.CustomerPreferences
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.CustomerPreference, stage1: CP-ENT-003 } }
+    verification: static_verified
+
+  - id: CE-SALES-QUOTE
+    name: Sales quote
+    physical_table: dbo.SalesQuotes
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.SalesQuote, stage1: OD-ENT-006 } }
+    cross_domain_relationship: { CE-ORDER: "ConvertedOrderId -> dbo.Orders (filtered-unique)" }
+    verification: static_verified
+
+  - id: CE-SALES-QUOTE-LINE
+    name: Sales quote line
+    physical_table: dbo.SalesQuoteLines
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.SalesQuoteLine, stage1: OD-ENT-007 } }
+    verification: static_verified
+
+  - id: CE-DISCOUNT-APPROVAL
+    name: Discount approval
+    physical_table: dbo.DiscountApprovals
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.DiscountApproval, stage1: OD-ENT-008 } }
+    verification: static_verified
+
+  - id: CE-SALES-COMMISSION
+    name: Sales commission
+    physical_table: dbo.SalesCommissions
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.SalesCommission, stage1: OD-ENT-009 } }
+    note: Rows written by usp_ConvertQuoteToOrder; displayed by AgentTaskService.
+    verification: static_verified
+
+  - id: CE-SALES-AGENT
+    name: Sales agent
+    physical_table: dbo.SalesAgents
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.SalesAgent, stage1: OD-ENT-005 } }
+    cross_domain_relationship: { CE-ORDER: "Orders.PlacedByAgentId -> dbo.SalesAgents (read by FulfillmentAPI report only)" }
+    verification: static_verified
+
+  - id: CE-SALES-AGENT-TASK
+    name: Sales agent task
+    physical_table: dbo.SalesAgentTasks
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.SalesAgentTask, stage1: OD-ENT-010 } }
+    verification: static_verified
+
+  - id: CE-CANCELLATION-OVERRIDE
+    name: Cancellation override (audit)
+    physical_table: dbo.CancellationOverrides
+    kind: app_owned
+    owning_app: APP-ORDERDESK
+    app_models: { APP-ORDERDESK: { class: OrderDesk.Domain.CancellationOverride, stage1: OD-ENT-013 } }
+    verification: static_verified
+
+  - id: CE-CART
+    name: Shopping cart
+    physical_table: dbo.ShoppingCarts
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.ShoppingCart, stage1: CP-ENT-007 } }
+    verification: static_verified
+
+  - id: CE-CART-ITEM
+    name: Shopping cart item
+    physical_table: dbo.ShoppingCartItems
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.ShoppingCartItem, stage1: CP-ENT-008 } }
+    verification: static_verified
+
+  - id: CE-COUPON
+    name: Coupon
+    physical_table: dbo.Coupons
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.Coupon, stage1: CP-ENT-011 } }
+    verification: static_verified
+
+  - id: CE-COUPON-REDEMPTION
+    name: Coupon redemption
+    physical_table: dbo.CouponRedemptions
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.CouponRedemption, stage1: CP-ENT-012 } }
+    verification: static_verified
+
+  - id: CE-WISHLIST
+    name: Wishlist
+    physical_table: dbo.Wishlists
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.Wishlist, stage1: CP-ENT-019 } }
+    verification: static_verified
+
+  - id: CE-WISHLIST-ITEM
+    name: Wishlist item
+    physical_table: dbo.WishlistItems
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.WishlistItem, stage1: CP-ENT-020 } }
+    verification: static_verified
+
+  - id: CE-SUPPORT-TICKET
+    name: Support ticket
+    physical_table: dbo.SupportTickets
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.SupportTicket, stage1: CP-ENT-017 } }
+    verification: static_verified
+
+  - id: CE-SUPPORT-TICKET-MESSAGE
+    name: Support ticket message
+    physical_table: dbo.SupportTicketMessages
+    kind: app_owned
+    owning_app: APP-PORTAL
+    app_models: { APP-PORTAL: { class: CustomerPortal.Domain.SupportTicketMessage, stage1: CP-ENT-018 } }
+    verification: static_verified
+
+  - id: CE-WAREHOUSE
+    name: Warehouse
+    physical_table: dbo.Warehouses
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.Warehouse, stage1: FA-ENT-001 } }
+    verification: static_verified
+
+  - id: CE-WAREHOUSE-BIN
+    name: Warehouse bin
+    physical_table: dbo.WarehouseBins
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.WarehouseBin, stage1: FA-ENT-002 } }
+    verification: static_verified
+
+  - id: CE-INVENTORY-ALLOCATION
+    name: Inventory allocation
+    physical_table: dbo.InventoryAllocations
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.InventoryAllocation, stage1: FA-ENT-006 } }
+    verification: static_verified
+
+  - id: CE-PICKLIST
+    name: Pick list
+    physical_table: dbo.PickLists
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.PickList, stage1: FA-ENT-007 } }
+    verification: static_verified
+
+  - id: CE-PICKLIST-ITEM
+    name: Pick list item
+    physical_table: dbo.PickListItems
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.PickListItem, stage1: FA-ENT-008 } }
+    verification: static_verified
+
+  - id: CE-SHIPMENT-PACKAGE
+    name: Shipment package
+    physical_table: dbo.ShipmentPackages
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.ShipmentPackage, stage1: FA-ENT-010 } }
+    verification: static_verified
+
+  - id: CE-RETURN-RECEIPT
+    name: Return receipt
+    physical_table: dbo.ReturnReceipts
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.ReturnReceipt, stage1: FA-ENT-013 } }
+    verification: static_verified
+
+  - id: CE-WAREHOUSE-ADJUSTMENT
+    name: Warehouse adjustment
+    physical_table: dbo.WarehouseAdjustments
+    kind: app_owned
+    owning_app: APP-FULFILL
+    app_models: { APP-FULFILL: { class: FulfillmentAPI.Domain.WarehouseAdjustment, stage1: FA-ENT-014 } }
+    verification: static_verified
+
+distinct_entities_similar_names:
+  - note: >
+      CE-CUSTOMER (dbo.Customers) and CE-CUSTOMER-ACCOUNT (dbo.CustomerAccounts) are DISTINCT entities
+      despite related names — one is the customer profile, the other the portal login identity. They
+      are related 1:1 by CustomerId but must not be collapsed.
+  - note: >
+      CE-INVENTORY (dbo.Inventory, stock position) vs CE-INVENTORY-ALLOCATION (dbo.InventoryAllocations,
+      a reservation record) are distinct entities in the same domain, not two models of one entity.
+  - note: >
+      CE-RETURN (dbo.Returns, the request + lifecycle) vs CE-RETURN-RECEIPT (dbo.ReturnReceipts, the
+      warehouse receipt) are distinct — a receipt references a return but is a separate record/table.
+
+cross_domain_relationships:
+  - from: CE-SALES-QUOTE (PF-DOM-QUOTING)
+    to: CE-ORDER (PF-DOM-ORDER)
+    via: "SalesQuotes.ConvertedOrderId -> Orders.OrderId (usp_ConvertQuoteToOrder)"
+    verification: static_verified
+  - from: CE-ORDER (PF-DOM-ORDER)
+    to: CE-SALES-AGENT (PF-DOM-SALESOPS)
+    via: "Orders.PlacedByAgentId -> SalesAgents.SalesAgentId (set by OrderDesk; read by FulfillmentAPI report)"
+    verification: static_verified
+  - from: CE-INVENTORY-ALLOCATION / CE-PICKLIST / CE-SHIPMENT (PF-DOM-FULFILL/SHIPMENT)
+    to: CE-ORDER (PF-DOM-ORDER)
+    via: "OrderId FK; FulfillmentAPI advances Orders.OrderStatus"
+    verification: static_verified
+  - from: CE-RETURN-RECEIPT (PF-DOM-RETURNS)
+    to: CE-INVENTORY (PF-DOM-CATALOG)
+    via: "usp_ReceiveReturnAndAdjust increments Inventory.QuantityOnHand + writes WarehouseAdjustments"
+    verification: behavior_verified
+  - from: CE-COUPON-REDEMPTION (PF-DOM-SHOPPING)
+    to: CE-ORDER (PF-DOM-ORDER)
+    via: "CouponRedemptions.OrderId -> Orders.OrderId (written at checkout)"
+    verification: static_verified

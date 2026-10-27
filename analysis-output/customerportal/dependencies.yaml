@@ -1,0 +1,238 @@
+# CustomerPortal — Dependency Analysis (code, database, external)
+version: 1
+application: CustomerPortal
+
+runtime:
+  entry_project: src/CustomerPortal/CustomerPortal.Web (Microsoft.NET.Sdk.Web, net10.0)
+  startup: src/CustomerPortal/CustomerPortal.Web/Program.cs
+  mvc_routing: default route "{controller=Home}/{action=Index}/{id?}"; AddControllersWithViews (MVC + Razor views)
+  authentication: cookie auth (CookieAuthenticationDefaults); LoginPath=/Account/Login; AccessDeniedPath=/Account/Login; ExpireTimeSpan=4h
+  authorization: AddAuthorization; most controllers [Authorize]; Catalog + Home + Account actions anonymous
+  antiforgery: default-on for MVC; all POST actions annotated [ValidateAntiForgeryToken]
+  identity_claims: ClaimTypes.Name(Username), CustomerAccountId, CustomerId, CustomerStatus (set in AccountController.Login; read via CurrentUser extensions)
+  db_access_tech: EF Core (Microsoft.EntityFrameworkCore.SqlServer) via PortalDbContext; NO stored procedures used
+  connection: DbConnectionConfig.Resolve(config.GetConnectionString("LegacyRetailDB")) -> env LEGACYRETAIL_CONNECTION else LocalDB default
+  resilience: DbContext UseSqlServer(EnableRetryOnFailure); checkout transaction wrapped in Database.CreateExecutionStrategy
+  password_hashing: LegacyRetail.Common.PasswordHasher (PBKDF2) via AuthService
+
+project_dependencies:
+  - CustomerPortal.Web -> CustomerPortal.Application, CustomerPortal.Domain, CustomerPortal.Infrastructure, Shared/LegacyRetail.Common
+  - CustomerPortal.Application -> CustomerPortal.Domain, CustomerPortal.Infrastructure, Shared/LegacyRetail.Common
+  - CustomerPortal.Infrastructure -> CustomerPortal.Domain, Shared/LegacyRetail.Common
+  - CustomerPortal.Domain -> (none)
+
+nuget_packages:
+  - Microsoft.EntityFrameworkCore.SqlServer (Infrastructure, Web; version $(EfCoreVersion))
+  - Microsoft.EntityFrameworkCore.Relational (Application)
+  - System.Security.Cryptography.Pkcs 9.0.22 (transitive pin)
+
+shared_code_dependencies:
+  - LegacyRetail.Common.DbConnectionConfig: connection-string resolution
+  - LegacyRetail.Common.PasswordHasher: PBKDF2 Verify used by AuthService
+
+di_registrations:
+  dbcontext: PortalDbContext (scoped)
+  scoped_services: [AuthService, ProfileService, CatalogBrowseService, CartService, CheckoutService, OrderHistoryService, ReturnService, TrackingService, SupportTicketService, WishlistService]
+
+database_access:
+  # access: R=read, W=write; owner: logical (not proof of exclusive ownership)
+  - object: dbo.CustomerAccounts
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: CustomerAccount (CP-ENT-001)
+    purpose: Login identity; LastLoginUtc updated on sign-in.
+    evidence: AuthService.SignInAsync; PortalDbContext(CustomerAccount)
+  - object: dbo.Customers
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: ShopperProfile (CP-ENT-002)
+    purpose: Self-service profile view; update contact + shipping subset only.
+    evidence: ProfileService; PortalDbContext(ShopperProfile -> "Customers")
+  - object: dbo.CustomerPreferences
+    type: table
+    access: [R]
+    owner: portal (logical)
+    app_entity: CustomerPreference (CP-ENT-003)
+    purpose: Read account preferences (no write path observed).
+    evidence: ProfileService.GetPreferencesAsync
+  - object: dbo.Products
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: CatalogProduct (CP-ENT-004)
+    purpose: Catalog browse/search; unit price source for cart/order lines.
+    evidence: CatalogBrowseService; CartService; CheckoutService
+  - object: dbo.ProductCategories
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: Category (CP-ENT-005)
+    purpose: Category filter for catalog.
+    evidence: CatalogBrowseService.GetCategoriesAsync
+  - object: dbo.Inventory
+    type: table
+    access: [R]
+    owner: shared
+    app_entity: StockLevel (CP-ENT-006)
+    purpose: Display availability + authoritative checkout recheck.
+    evidence: CatalogBrowseService.DisplayAvailabilityAsync; CheckoutService (recheck)
+    external_dependency: EXT-INVENTORY-UPDATES
+  - object: dbo.ShoppingCarts
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: ShoppingCart (CP-ENT-007)
+    purpose: Active basket per account; status + applied coupon code.
+    evidence: CartService; CheckoutService
+  - object: dbo.ShoppingCartItems
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: ShoppingCartItem (CP-ENT-008)
+    purpose: Cart line items.
+    evidence: CartService
+  - object: dbo.Wishlists
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: Wishlist (CP-ENT-019)
+    purpose: Per-account saved products list.
+    evidence: WishlistService
+  - object: dbo.WishlistItems
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: WishlistItem (CP-ENT-020)
+    purpose: Wishlist entries.
+    evidence: WishlistService
+  - object: dbo.Coupons
+    type: table
+    access: [R]
+    owner: portal (logical)
+    app_entity: Coupon (CP-ENT-011)
+    purpose: Coupon definition read for eligibility + discount.
+    evidence: CartService.ApplyCouponAsync; CheckoutService
+  - object: dbo.CouponRedemptions
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: CouponRedemption (CP-ENT-012)
+    purpose: Count for cap checks; create a redemption at checkout.
+    evidence: CartService (count); CheckoutService (insert)
+  - object: dbo.SupportTickets
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: SupportTicket (CP-ENT-017)
+    purpose: Customer support cases + status transitions.
+    evidence: SupportTicketService
+  - object: dbo.SupportTicketMessages
+    type: table
+    access: [R, W]
+    owner: portal (logical)
+    app_entity: SupportTicketMessage (CP-ENT-018)
+    purpose: Ticket thread messages (Author 'Customer' from portal).
+    evidence: SupportTicketService
+    external_dependency: EXT-SUPPORT-AGENT
+  - object: dbo.Orders
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: CustomerOrder (CP-ENT-009)
+    purpose: Create portal orders at checkout; list/view; customer cancellation (status).
+    evidence: CheckoutService; OrderHistoryService
+    external_dependency: EXT-ORDERS-OTHER-SOURCE
+  - object: dbo.OrderLines
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: CustomerOrderLine (CP-ENT-010)
+    purpose: Order line items created at checkout; read for order detail/return.
+    evidence: CheckoutService; OrderHistoryService; ReturnService
+  - object: dbo.Returns
+    type: table
+    access: [R, W]
+    owner: shared
+    app_entity: CustomerReturn (CP-ENT-013)
+    purpose: Create return requests (status Requested); list own returns.
+    evidence: ReturnService
+    external_dependency: EXT-RETURNS-TRANSITION
+  - object: dbo.ReturnLines
+    type: table
+    access: [W]  # written when creating a return; read occurs via order lines, not return lines
+    owner: shared
+    app_entity: CustomerReturnLine (CP-ENT-014)
+    purpose: Return line items copied from the order.
+    evidence: ReturnService.RequestReturnAsync
+  - object: dbo.Shipments
+    type: table
+    access: [R]
+    owner: external
+    app_entity: TrackedShipment (CP-ENT-015)
+    purpose: Read-only shipment tracking display.
+    evidence: TrackingService.GetOrderTrackingAsync
+    external_dependency: EXT-SHIPMENTS
+  - object: dbo.CarrierEvents
+    type: table
+    access: [R]
+    owner: external
+    app_entity: TrackingEvent (CP-ENT-016)
+    purpose: Read-only carrier events under a shipment.
+    evidence: TrackingService (Include Events)
+    external_dependency: EXT-CARRIEREVENTS
+
+stored_procedures: []   # CustomerPortal uses none; all access is via EF Core LINQ
+
+external_dependencies:
+  - id: EXT-SHIPMENTS
+    object: dbo.Shipments
+    nature: Read-only. Not declared in the schema files for portal/shared tables
+            (01_schema.sql, 03_customerportal.sql); populated by an external application.
+            Its creator/updater is not inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-CARRIEREVENTS
+    object: dbo.CarrierEvents
+    nature: Read-only carrier events linked to shipments; produced externally. Not inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-ORDERS-OTHER-SOURCE
+    object: dbo.Orders
+    nature: >
+      Orders.OrderSource (CK_Orders_Source) allows 'OrderDesk' as well as 'CustomerPortal',
+      and OrderStatus permits Allocated/Picking/Packed/Shipped/Delivered. The portal only
+      creates Confirmed/CustomerPortal orders and sets Cancelled; other sources and later
+      status transitions are produced externally. Not inferred further.
+    confidence: high
+    verification: static_verified
+  - id: EXT-INVENTORY-UPDATES
+    object: dbo.Inventory
+    nature: The portal only reads inventory (display + checkout recheck). QuantityOnHand/
+            QuantityAllocated are modified by an external process. Not inferred.
+    confidence: high
+    verification: static_verified
+  - id: EXT-RETURNS-TRANSITION
+    object: dbo.Returns
+    nature: >
+      The portal creates returns in 'Requested' status and reads them, but never changes
+      their status. The CK_Returns_Status set includes Approved/Rejected/Received/Closed,
+      implying external actors drive those transitions. Not inferred further.
+    confidence: medium
+    verification: inferred
+  - id: EXT-SUPPORT-AGENT
+    object: dbo.SupportTicketMessages
+    nature: >
+      The portal authors messages with Author='Customer'. The Author column accepts other
+      values ("agent name" per DDL comment), implying agent-side replies are authored by an
+      external mechanism. Not inferred further.
+    confidence: medium
+    verification: inferred
+
+shared_physical_tables_note: >
+  dbo.Customers, dbo.Products, dbo.ProductCategories, dbo.Orders, dbo.OrderLines,
+  dbo.Inventory, dbo.Returns, dbo.ReturnLines are declared in database/schema/01_schema.sql,
+  whose header states the database is a single schema shared by multiple applications.
+  CustomerPortal defines its own entity shapes over them. Database access is not treated as
+  proof of exclusive ownership.

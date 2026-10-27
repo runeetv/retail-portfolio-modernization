@@ -1,0 +1,82 @@
+# Business rules inventory (ground truth) with implementation location.
+version: 1
+rules:
+  - id: RULE-QUOTE-EXPIRY
+    statement: Quotations expire after a configurable number of days (default 14).
+    location: csharp
+    evidence: src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#DefaultQuoteValidityDays, SalesQuote.IsExpired
+  - id: RULE-DISCOUNT-THRESHOLD
+    statement: Discounts above 15% require explicit approval.
+    location: csharp
+    evidence: src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#RequiresDiscountApproval; QuoteService.ApplyDiscountAsync
+  - id: RULE-QUOTE-CONVERT-APPROVED
+    statement: Only approved, non-expired quotes may convert to an order, at most once.
+    location: sql+csharp
+    evidence: database/procedures/procedures.sql#usp_ConvertQuoteToOrder (50011/50012/50013); OrderDeskRules.CanConvertToOrder
+  - id: RULE-COMMISSION
+    statement: Commission = order value * agent rate, halved when discount >= 20%.
+    location: sql+csharp
+    evidence: database/procedures/procedures.sql#usp_ConvertQuoteToOrder; OrderDeskRules.CalculateCommission
+  - id: RULE-MANDATORY-CUSTOMER-INFO
+    statement: Orders cannot be created when mandatory customer info (email + shipping address) is missing.
+    location: duplicated
+    evidence:
+      - database/procedures/procedures.sql#usp_ConvertQuoteToOrder (50014)
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs#CustomerCanOrder
+      - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (profile email/ship guard)
+  - id: RULE-STAFF-CANCEL
+    statement: Staff may cancel Pending/Confirmed/Allocated orders; authorized agents may override with audit.
+    location: sql
+    evidence: database/procedures/procedures.sql#usp_EvaluateCancellationEligibility; OrderService.CancelOrderAsync
+  - id: RULE-CUSTOMER-CANCEL
+    statement: Customers may self-cancel only Pending/Confirmed orders (stricter than staff).
+    location: csharp
+    evidence: src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CustomerCanCancel
+  - id: RULE-COUPON-ELIGIBILITY
+    statement: Coupon eligibility depends on active flag, expiry, min cart total, required status, redemption cap.
+    location: csharp
+    evidence: src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#EvaluateCoupon
+  - id: RULE-RETURN-WINDOW
+    statement: Returns allowed only for Delivered orders within 30 days.
+    location: csharp
+    evidence: src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#CanRequestReturn
+  - id: RULE-TICKET-TRANSITIONS
+    statement: Support tickets follow a valid status-transition graph.
+    location: csharp
+    evidence: src/CustomerPortal/CustomerPortal.Domain/PortalRules.cs#IsValidTicketTransition
+  - id: RULE-CHECKOUT-IDEMPOTENT
+    statement: Checkout is idempotent on an idempotency key (no duplicate orders).
+    location: csharp+db-constraint
+    evidence: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs; database/schema/01_schema.sql#UQ_Orders_Idempotency
+  - id: RULE-INVENTORY-RECHECK
+    statement: Inventory availability is rechecked before checkout completes.
+    location: csharp
+    evidence: src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs (per-line stock recheck)
+  - id: RULE-NO-OVER-ALLOCATION
+    statement: Inventory cannot be allocated beyond available (OnHand - Allocated).
+    location: sql
+    evidence: database/procedures/procedures.sql#usp_AllocateInventory (50022); CHECK CK_Inventory_Alloc
+  - id: RULE-ALLOC-BLOCK-CANCELLED
+    statement: Cancelled orders cannot be allocated/fulfilled.
+    location: sql+csharp
+    evidence: database/procedures/procedures.sql#usp_AllocateInventory (50021); FulfillmentRules.IsBlockedForFulfillment
+  - id: RULE-PICK-AFTER-ALLOC
+    statement: Picking cannot begin before allocation exists.
+    location: csharp
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs#CreatePickListAsync
+  - id: RULE-PACKAGE-AFTER-PICK
+    statement: Items must be picked before a shipment is packaged.
+    location: csharp
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs#CreateShipmentWithPackageAsync; FulfillmentRules.CanPackageShipment
+  - id: RULE-DISPATCH-REQUIRES-CARRIER
+    statement: A shipment cannot be dispatched without a package and a carrier reference.
+    location: csharp
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs#CanDispatch; ShipmentService.UpdateStatusAsync
+  - id: RULE-CARRIER-EVENT-IDEMPOTENT
+    statement: Repeated carrier events are idempotent.
+    location: csharp+db-constraint
+    evidence: src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs#RecordCarrierEventAsync; UQ_CarrierEvents
+  - id: RULE-RETURN-RECEIPT-NO-REFUND
+    statement: Warehouse receipt restocks inventory but does NOT imply refund approval; receipt is idempotent and only for Approved returns.
+    location: sql
+    evidence: database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust (50031)

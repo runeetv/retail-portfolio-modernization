@@ -1,0 +1,14 @@
+@{
+    ViewData["Title"] = "Receive returns";
+    var warehouses = ViewBag.Warehouses as List<FulfillmentAPI.Domain.Warehouse> ?? new();
+}
+<h1>Receive approved return</h1>
+<div class="card" style="max-width:460px">
+    <form method="post" asp-action="Receive">
+        @Html.AntiForgeryToken()
+        <p><label>Return id<br /><input name="returnId" type="number" required /></label></p>
+        <p><label>Warehouse<br /><select name="warehouseId">@foreach (var w in warehouses) { <option value="@w.WarehouseId">@w.Code</option> }</select></label></p>
+        <button class="btn" type="submit">Receive + restock</button>
+    </form>
+    <p style="color:#64748b;font-size:13px">Only 'Approved' returns can be received; idempotent; does not refund.</p>
+</div>

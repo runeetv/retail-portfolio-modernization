@@ -1,0 +1,15 @@
+@{
+    ViewData["Title"] = "Staff";
+}
+<h1>Staff workspace</h1>
+<div class="card">
+    <ul>
+        <li><a asp-area="Staff" asp-controller="Customers" asp-action="Index">Customers</a> — search + full contact edit</li>
+        <li><a asp-area="Staff" asp-controller="Catalog" asp-action="Index">Catalog</a> — browse + availability</li>
+        <li><a asp-area="Staff" asp-controller="Quotes" asp-action="Index">Quotes</a> — create, discount, convert to order</li>
+        <li><a asp-area="Staff" asp-controller="Approvals" asp-action="Index">Discount approvals</a></li>
+        <li><a asp-area="Staff" asp-controller="Orders" asp-action="Index">Orders</a> — view, create, cancel + override</li>
+        <li><a asp-area="Staff" asp-controller="Returns" asp-action="Index">Returns review</a></li>
+        <li><a asp-area="Staff" asp-controller="Agents" asp-action="Index">Agent tasks + commissions</a></li>
+    </ul>
+</div>

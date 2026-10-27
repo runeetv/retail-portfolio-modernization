@@ -1,0 +1,181 @@
+# Module Ownership Matrix — target modular monolith
+# Maps each target module to the capabilities, canonical entities, physical tables (owner/writer/reader),
+# and stored procedures it owns. Source evidence from Stage 2 canonical-domains + cross-app-dependencies.
+# access: O = owns/primary writer, W = writes, R = reads
+version: 1
+
+modules:
+  - id: MOD-IDENTITY
+    name: Identity & Access
+    capabilities: [CP-CAP-001, CP-CAP-002]
+    canonical_entities: [CE-CUSTOMER-ACCOUNT]
+    tables: { CustomerAccounts: O }
+    stored_procedures: []
+    depends_on: [MOD-PLATFORM]
+    notes: Login identity (CustomerAccount) kept DISTINCT from Customer record (Stage 3 trap TERM-2). PBKDF2 via LegacyRetail.Common.
+
+  - id: MOD-CUSTOMER
+    name: Customer Management
+    capabilities: [OD-CAP-001, OD-CAP-002, CP-CAP-003]
+    canonical_entities: [CE-CUSTOMER, CE-CUSTOMER-PREFERENCE]
+    tables: { Customers: W, CustomerPreferences: O }
+    stored_procedures: []
+    depends_on: [MOD-IDENTITY, MOD-PLATFORM]
+    notes: One Customer record; staff full-edit + customer self-service subset as two policies (RECON-CUSTOMER).
+
+  - id: MOD-CATALOG
+    name: Catalog & Inventory Read
+    capabilities: [OD-CAP-003, OD-CAP-004, CP-CAP-004, CP-CAP-005, FA-CAP-002]
+    canonical_entities: [CE-PRODUCT, CE-CATEGORY, CE-INVENTORY]
+    tables: { Products: R, ProductCategories: R, Inventory: R }
+    stored_procedures: []
+    depends_on: [MOD-PLATFORM]
+    notes: >
+      Read-only catalog + availability. Inventory READS live here; the WRITE path (allocation/restock)
+      is owned by MOD-FULFILLMENT. Shared availability expression centralized here (RECON-AVAIL-EXPR).
+      Products/Categories base rows maintained by external/seed (DbProvisioner) — unchanged.
+
+  - id: MOD-QUOTING
+    name: Sales Quotation & Discount
+    capabilities: [OD-CAP-005, OD-CAP-006, OD-CAP-007, OD-CAP-008, OD-CAP-009]
+    canonical_entities: [CE-SALES-QUOTE, CE-SALES-QUOTE-LINE, CE-DISCOUNT-APPROVAL, CE-SALES-COMMISSION]
+    tables: { SalesQuotes: O, SalesQuoteLines: O, DiscountApprovals: O, SalesCommissions: W }
+    stored_procedures: [usp_ConvertQuoteToOrder]
+    depends_on: [MOD-CUSTOMER, MOD-CATALOG, MOD-ORDER, MOD-SALESOPS, MOD-PLATFORM]
+    notes: OrderDesk-only. Conversion proc writes shared Orders (MOD-ORDER) + SalesCommissions in one tx.
+
+  - id: MOD-ORDER
+    name: Order Capture & Lifecycle
+    capabilities: [OD-CAP-010, OD-CAP-011, OD-CAP-012, CP-CAP-009, CP-CAP-010, CP-CAP-011]
+    canonical_entities: [CE-ORDER, CE-ORDER-LINE, CE-CANCELLATION-OVERRIDE]
+    tables: { Orders: W, OrderLines: W, CancellationOverrides: O }
+    stored_procedures: [usp_EvaluateCancellationEligibility]
+    depends_on: [MOD-CUSTOMER, MOD-CATALOG, MOD-SHOPPING, MOD-PLATFORM]
+    notes: >
+      One Order aggregate over three former models (Order/CustomerOrder/FulfillmentOrder). Create via
+      staff or checkout (RECON-ORDER-CREATE); scoped reads (RECON-ORDER-VIEW); staff vs customer cancel
+      policies (RECON-CANCEL). FulfillmentAPI's status roll-forward is performed by MOD-FULFILLMENT.
+
+  - id: MOD-SHOPPING
+    name: Shopping Experience
+    capabilities: [CP-CAP-006, CP-CAP-007, CP-CAP-008, CP-CAP-018]
+    canonical_entities: [CE-CART, CE-CART-ITEM, CE-COUPON, CE-COUPON-REDEMPTION, CE-WISHLIST, CE-WISHLIST-ITEM]
+    tables: { ShoppingCarts: O, ShoppingCartItems: O, Coupons: O, CouponRedemptions: O, Wishlists: O, WishlistItems: O }
+    stored_procedures: []
+    depends_on: [MOD-CATALOG, MOD-PLATFORM]
+    notes: CustomerPortal-only. Coupon redemption written during checkout (MOD-ORDER) in one tx.
+
+  - id: MOD-FULFILLMENT
+    name: Warehouse Fulfillment
+    capabilities: [FA-CAP-001, FA-CAP-003, FA-CAP-004, FA-CAP-005, FA-CAP-012]
+    canonical_entities: [CE-WAREHOUSE, CE-WAREHOUSE-BIN, CE-INVENTORY-ALLOCATION, CE-PICKLIST, CE-PICKLIST-ITEM, CE-WAREHOUSE-ADJUSTMENT]
+    tables: { Warehouses: O, WarehouseBins: O, InventoryAllocations: O, PickLists: O, PickListItems: O, WarehouseAdjustments: O, Inventory: W, Orders: W }
+    stored_procedures: [usp_AllocateInventory]
+    depends_on: [MOD-ORDER, MOD-CATALOG, MOD-PLATFORM]
+    notes: >
+      SOLE writer of Inventory allocation + the warehouse status roll-forward on Orders (Allocated->Picking->
+      Packed->Shipped->Delivered). Owns the physical allocation (usp_AllocateInventory).
+
+  - id: MOD-SHIPMENT
+    name: Shipment & Tracking
+    capabilities: [FA-CAP-006, FA-CAP-007, FA-CAP-008, FA-CAP-009, CP-CAP-014, OD-CAP-016]
+    canonical_entities: [CE-SHIPMENT, CE-SHIPMENT-PACKAGE, CE-CARRIER-EVENT]
+    tables: { Shipments: O, ShipmentPackages: O, CarrierEvents: O }
+    stored_procedures: []
+    depends_on: [MOD-ORDER, MOD-PLATFORM]
+    notes: Sole writer of Shipments/CarrierEvents; exposes read tracking consumed by customer (friendly) + staff (raw) surfaces (RECON-SHIPMENT).
+
+  - id: MOD-RETURNS
+    name: Returns Lifecycle
+    capabilities: [CP-CAP-012, CP-CAP-013, OD-CAP-013, FA-CAP-010, FA-CAP-011]
+    canonical_entities: [CE-RETURN, CE-RETURN-LINE, CE-RETURN-RECEIPT]
+    tables: { Returns: W, ReturnLines: W, ReturnReceipts: O }
+    stored_procedures: [usp_ReceiveReturnAndAdjust]
+    depends_on: [MOD-ORDER, MOD-FULFILLMENT, MOD-PLATFORM]
+    notes: Full Requested->Approved/Rejected->Received lifecycle now in one module (RECON-RETURNS). Receipt restocks Inventory (coordinated with MOD-FULFILLMENT via the proc).
+
+  - id: MOD-SUPPORT
+    name: Customer Support
+    capabilities: [CP-CAP-015, CP-CAP-016, CP-CAP-017]
+    canonical_entities: [CE-SUPPORT-TICKET, CE-SUPPORT-TICKET-MESSAGE]
+    tables: { SupportTickets: O, SupportTicketMessages: O }
+    stored_procedures: []
+    depends_on: [MOD-PLATFORM]
+    notes: CustomerPortal-only.
+
+  - id: MOD-SALESOPS
+    name: Sales-Agent Operations
+    capabilities: [OD-CAP-014, OD-CAP-015]
+    canonical_entities: [CE-SALES-AGENT, CE-SALES-AGENT-TASK]
+    tables: { SalesAgents: O, SalesAgentTasks: O }
+    stored_procedures: []
+    depends_on: [MOD-PLATFORM]
+    notes: OrderDesk-only. SalesCommissions read here but written by MOD-QUOTING's conversion proc.
+
+  - id: MOD-REPORTING
+    name: Warehouse Activity Reporting
+    capabilities: [FA-CAP-013]
+    canonical_entities: []
+    tables: { Warehouses: R, PickLists: R, InventoryAllocations: R, Orders: R, Shipments: R, Customers: R, SalesAgents: R }
+    stored_procedures: [usp_WarehouseActivitySummary]
+    depends_on: [MOD-FULFILLMENT, MOD-ORDER, MOD-CUSTOMER, MOD-SALESOPS, MOD-SHIPMENT, MOD-PLATFORM]
+    notes: >
+      Cross-domain read-only report. DEP-REPORT-JOIN (reaching SalesAgents) becomes an intra-app read
+      after consolidation — simpler, but keep it a read-only reporting concern that does not own write paths.
+
+  - id: MOD-PLATFORM
+    name: Platform / Cross-cutting
+    capabilities: [FA-RULE-023, FA-RULE-024, CP-RULE-023, CP-RULE-014]
+    canonical_entities: []
+    tables: {}
+    stored_procedures: []
+    depends_on: []
+    notes: >
+      AuthN (cookie for web + X-Api-Key adapter for legacy API routes), authZ (roles + record ownership
+      CP-RULE-014), centralized error mapping (RFC7807 + {error}), antiforgery (CP-RULE-023), DbContext(s),
+      LegacyRetail.Common (DbConnectionConfig + PasswordHasher).
+
+# ---- Table -> owning module (single source of write truth per table) ----
+table_ownership:
+  Customers:            { owner_module: MOD-CUSTOMER, writers: [MOD-CUSTOMER], readers: [MOD-REPORTING, MOD-IDENTITY] }
+  CustomerAccounts:     { owner_module: MOD-IDENTITY }
+  CustomerPreferences:  { owner_module: MOD-CUSTOMER }
+  Products:             { owner_module: MOD-CATALOG, writers: [external_seed], readers: [MOD-CATALOG, MOD-QUOTING, MOD-SHOPPING] }
+  ProductCategories:    { owner_module: MOD-CATALOG, writers: [external_seed] }
+  Inventory:            { owner_module: MOD-FULFILLMENT, writers: [MOD-FULFILLMENT, external_seed], readers: [MOD-CATALOG, MOD-ORDER] }
+  Orders:               { owner_module: MOD-ORDER, writers: [MOD-ORDER, MOD-QUOTING(proc), MOD-FULFILLMENT(status)], readers: [MOD-REPORTING, MOD-SHIPMENT, MOD-RETURNS] }
+  OrderLines:           { owner_module: MOD-ORDER, writers: [MOD-ORDER, MOD-QUOTING(proc)] }
+  SalesQuotes:          { owner_module: MOD-QUOTING }
+  SalesQuoteLines:      { owner_module: MOD-QUOTING }
+  DiscountApprovals:    { owner_module: MOD-QUOTING }
+  SalesCommissions:     { owner_module: MOD-QUOTING(proc), readers: [MOD-SALESOPS] }
+  SalesAgents:          { owner_module: MOD-SALESOPS, readers: [MOD-QUOTING, MOD-ORDER, MOD-REPORTING] }
+  SalesAgentTasks:      { owner_module: MOD-SALESOPS }
+  CancellationOverrides:{ owner_module: MOD-ORDER }
+  ShoppingCarts:        { owner_module: MOD-SHOPPING }
+  ShoppingCartItems:    { owner_module: MOD-SHOPPING }
+  Coupons:              { owner_module: MOD-SHOPPING }
+  CouponRedemptions:    { owner_module: MOD-SHOPPING, writers: [MOD-SHOPPING, MOD-ORDER(checkout)] }
+  Wishlists:            { owner_module: MOD-SHOPPING }
+  WishlistItems:        { owner_module: MOD-SHOPPING }
+  SupportTickets:       { owner_module: MOD-SUPPORT }
+  SupportTicketMessages:{ owner_module: MOD-SUPPORT }
+  Returns:              { owner_module: MOD-RETURNS, writers: [MOD-RETURNS(all stages)], readers: [MOD-ORDER] }
+  ReturnLines:          { owner_module: MOD-RETURNS }
+  ReturnReceipts:       { owner_module: MOD-RETURNS }
+  Warehouses:           { owner_module: MOD-FULFILLMENT }
+  WarehouseBins:        { owner_module: MOD-FULFILLMENT }
+  InventoryAllocations: { owner_module: MOD-FULFILLMENT }
+  PickLists:            { owner_module: MOD-FULFILLMENT }
+  PickListItems:        { owner_module: MOD-FULFILLMENT }
+  Shipments:            { owner_module: MOD-SHIPMENT }
+  ShipmentPackages:     { owner_module: MOD-SHIPMENT }
+  CarrierEvents:        { owner_module: MOD-SHIPMENT }
+  WarehouseAdjustments: { owner_module: MOD-FULFILLMENT }
+
+summary:
+  modules: 13
+  tables_mapped: 40
+  stored_procedures_mapped: 4   # usp_ConvertQuoteToOrder, usp_EvaluateCancellationEligibility, usp_AllocateInventory, usp_ReceiveReturnAndAdjust (+ usp_WarehouseActivitySummary read-only in MOD-REPORTING)
+  shared_write_tables: [Orders, OrderLines, Inventory, Returns, CouponRedemptions]
+  principle: "One owning module per table; cross-module writes to shared tables go through the owning module's domain service, not direct DbContext writes."

@@ -1,0 +1,288 @@
+# LegacyRetailPortfolio — Consolidated Capability Catalog (Stage 2)
+# Built from Stage 1 outputs (Phase A) and verified against source/SQL (Phase B).
+# Canonical IDs: PF-CAP-###. Original Stage 1 IDs preserved for traceability.
+# confidence: high | medium | low
+version: 1
+
+applications:
+  APP-ORDERDESK: { name: OrderDesk, type: WPF desktop (internal staff), stage1: analysis-output/orderdesk }
+  APP-PORTAL:    { name: CustomerPortal, type: ASP.NET Core MVC (customer self-service), stage1: analysis-output/customerportal }
+  APP-FULFILL:   { name: FulfillmentAPI, type: ASP.NET Core Web API (warehouse), stage1: analysis-output/fulfillmentapi }
+
+domains:
+  - PF-DOM-CUSTOMER   # Customer & Account
+  - PF-DOM-CATALOG    # Product Catalog & Inventory
+  - PF-DOM-QUOTING    # Sales Quotation & Discount (OrderDesk-only)
+  - PF-DOM-ORDER      # Order Capture & Lifecycle
+  - PF-DOM-FULFILL    # Warehouse Fulfillment
+  - PF-DOM-SHIPMENT   # Shipment & Tracking
+  - PF-DOM-RETURNS    # Returns lifecycle
+  - PF-DOM-SHOPPING   # Shopping experience (CustomerPortal-only: cart/coupon/wishlist)
+  - PF-DOM-SUPPORT    # Customer support (CustomerPortal-only)
+  - PF-DOM-SALESOPS   # Sales-agent operations (OrderDesk-only)
+  - PF-DOM-REPORTING  # Warehouse activity reporting (FulfillmentAPI-only)
+
+capabilities:
+  # ---------------------------------------------------------------- Customer
+  - id: PF-CAP-CUSTOMER-MANAGE
+    name: Customer / account information management
+    description: >
+      Maintain the customer record and portal identity. Implemented with different scope
+      per application rather than duplicated.
+    domain: PF-DOM-CUSTOMER
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-001, OD-CAP-002]
+        behavior: Staff search customers and edit the full contact + shipping record.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-001, CP-CAP-002, CP-CAP-003]
+        behavior: Local sign-in/out (own identity) + self-service edit of a narrow subset (phone + shipping only).
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-013]
+        behavior: Reads Customers only indirectly (distinct-customer count inside the activity-summary stored proc); no customer management.
+    implementation_differences: >
+      OrderDesk edits all contact fields; CustomerPortal edits only phone + shipping and never
+      name/email/status; FulfillmentAPI does not manage customers at all (read-only via SQL report).
+    relationship: partial_overlap   # see OVL-CUSTOMER
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-002
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-003
+      - analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-013
+    confidence: high
+
+  # ---------------------------------------------------------------- Catalog / Inventory
+  - id: PF-CAP-CATALOG-BROWSE
+    name: Product catalog browsing / search
+    description: Browse and search the product catalog (active products).
+    domain: PF-DOM-CATALOG
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-003]
+        behavior: Staff browse/search active products (for quoting/ordering).
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-004, CP-CAP-005]
+        behavior: Shoppers browse/search + view product detail (anonymous allowed).
+    implementation_differences: Same read query shape (filter non-discontinued) targeting dbo.Products; audiences differ (staff vs shopper). FulfillmentAPI does not browse the catalog.
+    relationship: partial_overlap   # see OVL-CATALOG
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-003
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-004
+    confidence: high
+
+  - id: PF-CAP-INVENTORY-AVAILABILITY
+    name: Inventory availability
+    description: Determine/consume product availability. Three materially different implementations.
+    domain: PF-DOM-CATALOG
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-004]
+        behavior: Read-only pre-order availability check (OnHand - Allocated) before accepting a staff order.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-005]
+        behavior: Display availability for shoppers, plus an authoritative recheck during checkout; never writes inventory.
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-002, FA-CAP-003]
+        behavior: Reports availability AND performs the physical reservation (writes Inventory.QuantityAllocated) via usp_AllocateInventory.
+    implementation_differences: >
+      All three compute available = QuantityOnHand - QuantityAllocated, but only FulfillmentAPI
+      mutates inventory (allocation/restock). OrderDesk/CustomerPortal are read-only checks with
+      different timing (pre-order vs display+recheck).
+    relationship: partial_overlap   # see OVL-INVENTORY (+ duplicated availability expression DUP-AVAIL)
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-004
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-005
+      - analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-003
+    confidence: high
+
+  # ---------------------------------------------------------------- Quoting (OrderDesk-only)
+  - id: PF-CAP-QUOTING
+    name: Sales quotation & discount approval
+    description: Create quotes, add lines, apply discounts with an approval threshold, approve/reject, convert to order with commission.
+    domain: PF-DOM-QUOTING
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-005, OD-CAP-006, OD-CAP-007, OD-CAP-008, OD-CAP-009]
+        behavior: Full quotation lifecycle; conversion via usp_ConvertQuoteToOrder records a sales commission.
+    implementation_differences: n/a (single application)
+    relationship: unique   # see UNQ-QUOTING
+    evidence: [analysis-output/orderdesk/capabilities.yaml#OD-CAP-009]
+    confidence: high
+
+  # ---------------------------------------------------------------- Order creation + lifecycle
+  - id: PF-CAP-ORDER-CREATE
+    name: Order creation
+    description: Create a sales order. Two origins, same shared Orders/OrderLines tables, different workflows.
+    domain: PF-DOM-ORDER
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-009, OD-CAP-010]
+        behavior: Staff-assisted order (direct) and quote-to-order conversion; OrderSource='OrderDesk'.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-009]
+        behavior: Idempotent cart checkout; OrderSource='CustomerPortal'.
+    implementation_differences: >
+      OrderDesk creates via SQL proc (quote) or staff service with stock pre-check; CustomerPortal
+      creates via idempotent checkout (idempotency key) with inventory recheck + coupon discount.
+      FulfillmentAPI never creates orders.
+    relationship: partial_overlap   # see OVL-ORDER-CREATE
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-010
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-009
+    confidence: high
+
+  - id: PF-CAP-ORDER-VIEW
+    name: Order lookup / history
+    description: View orders. Scope differs by actor.
+    domain: PF-DOM-ORDER
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-011]
+        behavior: Staff list/view any order with lines.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-010]
+        behavior: Customers view only their own orders (ownership-filtered).
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-001]
+        behavior: Warehouse reads pending (Confirmed/Allocated) + specific orders for fulfillment.
+    implementation_differences: OrderDesk unrestricted; CustomerPortal ownership-scoped; FulfillmentAPI status-filtered work queue.
+    relationship: partial_overlap   # shared data, different read scope -> see OVL-ORDER-VIEW
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-011
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-010
+      - analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-001
+    confidence: high
+
+  - id: PF-CAP-ORDER-CANCEL
+    name: Order cancellation
+    description: Cancel an order. Different eligibility rules and enforcement per actor.
+    domain: PF-DOM-ORDER
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-012]
+        behavior: Staff cancellation via SQL eligibility proc (Pending/Confirmed/Allocated) with an authorized override + audit record.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-011]
+        behavior: Customer self-cancellation (C# rule) only for Pending/Confirmed.
+    implementation_differences: >
+      Different enforcement layer (SQL proc vs C#) AND a bounded eligibility divergence on
+      'Allocated' (staff may cancel; customer may not). OrderDesk also has an override-with-audit path.
+    relationship: partial_overlap   # see OVL-CANCEL (+ rule divergence RULE-CANCEL)
+    evidence:
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-012
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-011
+    confidence: high
+
+  # ---------------------------------------------------------------- Warehouse fulfillment (FulfillmentAPI-only)
+  - id: PF-CAP-FULFILL
+    name: Warehouse fulfillment execution
+    description: Allocate inventory, pick, package, dispatch; advance order fulfillment status.
+    domain: PF-DOM-FULFILL
+    implemented_by:
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-003, FA-CAP-004, FA-CAP-005, FA-CAP-006, FA-CAP-007]
+        behavior: Allocation (SQL), pick lists + picking, shipment packaging, status transitions/dispatch.
+    implementation_differences: n/a (single application)
+    relationship: unique   # see UNQ-FULFILL
+    evidence: [analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-004]
+    confidence: high
+
+  # ---------------------------------------------------------------- Shipment & tracking
+  - id: PF-CAP-SHIPMENT-TRACK
+    name: Shipment tracking visibility
+    description: Shipment + carrier-event data owned by one app and read by others.
+    domain: PF-DOM-SHIPMENT
+    implemented_by:
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-008, FA-CAP-009]
+        behavior: OWNS shipments + carrier events; records events (idempotent); exposes tracking.
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-014]
+        behavior: Reads shipments/events for the customer's order; presents friendly statuses (read-only).
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-016]
+        behavior: Reads shipment status for a selected order (customer-service lookup, read-only).
+    implementation_differences: FulfillmentAPI is the sole writer; CustomerPortal + OrderDesk are read-only consumers with different presentations.
+    relationship: partial_overlap   # single source of truth, multiple read responsibilities -> OVL-SHIPMENT
+    evidence:
+      - analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-008
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-014
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-016
+    confidence: high
+
+  # ---------------------------------------------------------------- Returns lifecycle (complementary across 3 apps)
+  - id: PF-CAP-RETURNS
+    name: Returns lifecycle
+    description: A single return business process split across three applications, each owning a distinct stage.
+    domain: PF-DOM-RETURNS
+    implemented_by:
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-012, CP-CAP-013]
+        behavior: Customer creates a return request (status 'Requested') and views own returns.
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-013]
+        behavior: Staff review 'Requested' returns -> 'Approved'/'Rejected'.
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-010, FA-CAP-011]
+        behavior: Warehouse receives 'Approved' returns -> 'Received', restocks inventory, writes adjustments.
+    implementation_differences: Each application owns a different lifecycle stage; no stage is duplicated.
+    relationship: complementary   # see WF-RETURN / OVL-RETURNS
+    evidence:
+      - analysis-output/customerportal/capabilities.yaml#CP-CAP-012
+      - analysis-output/orderdesk/capabilities.yaml#OD-CAP-013
+      - analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-010
+    confidence: high
+
+  # ---------------------------------------------------------------- CustomerPortal-only
+  - id: PF-CAP-SHOPPING
+    name: Shopping experience (cart, coupons, wishlist)
+    description: Cart management, coupon application, and wishlist — customer-facing commerce features.
+    domain: PF-DOM-SHOPPING
+    implemented_by:
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-006, CP-CAP-007, CP-CAP-008, CP-CAP-018]
+        behavior: Cart add/update/remove, coupon apply/remove (eligibility rules), wishlist.
+    implementation_differences: n/a
+    relationship: unique   # see UNQ-SHOPPING
+    evidence: [analysis-output/customerportal/capabilities.yaml#CP-CAP-006]
+    confidence: high
+
+  - id: PF-CAP-SUPPORT
+    name: Customer support tickets
+    description: Create/view support tickets, reply, and transition status (validated graph).
+    domain: PF-DOM-SUPPORT
+    implemented_by:
+      - app: APP-PORTAL
+        stage1_ids: [CP-CAP-015, CP-CAP-016, CP-CAP-017]
+        behavior: Ticket lifecycle owned entirely by CustomerPortal (agent replies may be authored externally).
+    implementation_differences: n/a
+    relationship: unique   # see UNQ-SUPPORT
+    evidence: [analysis-output/customerportal/capabilities.yaml#CP-CAP-015]
+    confidence: high
+
+  # ---------------------------------------------------------------- OrderDesk-only
+  - id: PF-CAP-SALESOPS
+    name: Sales-agent operations (tasks & commissions)
+    description: Assigned agent tasks and commission visibility.
+    domain: PF-DOM-SALESOPS
+    implemented_by:
+      - app: APP-ORDERDESK
+        stage1_ids: [OD-CAP-014, OD-CAP-015]
+        behavior: Agent task list/status + commission display (commissions written by the quote-conversion proc).
+    implementation_differences: n/a
+    relationship: unique   # see UNQ-SALESOPS
+    evidence: [analysis-output/orderdesk/capabilities.yaml#OD-CAP-014]
+    confidence: high
+
+  # ---------------------------------------------------------------- FulfillmentAPI-only
+  - id: PF-CAP-REPORTING
+    name: Warehouse activity reporting
+    description: Cross-domain per-warehouse activity summary (pick lists, shipments, allocations, staff vs web orders, customers, agents).
+    domain: PF-DOM-REPORTING
+    implemented_by:
+      - app: APP-FULFILL
+        stage1_ids: [FA-CAP-013]
+        behavior: usp_WarehouseActivitySummary joins fulfillment + shared Orders/Customers + externally-owned SalesAgents.
+    implementation_differences: n/a
+    relationship: unique   # reporting capability; underlying join is cross-domain (see cross-app-dependencies)
+    evidence: [analysis-output/fulfillmentapi/capabilities.yaml#FA-CAP-013]
+    confidence: high

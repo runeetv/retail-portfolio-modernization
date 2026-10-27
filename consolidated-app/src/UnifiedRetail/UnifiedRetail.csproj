@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>UnifiedRetail</RootNamespace>
+    <AssemblyName>UnifiedRetail</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.7" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
+  </ItemGroup>
+
+  <!-- Reuse the verified business logic, exact EF mappings, and stored-proc
+       invocations from the three source applications. This maximizes behavioral
+       fidelity for the PoC (see implementation-progress.md, DEC-PERSISTENCE note). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Shared\LegacyRetail.Common\LegacyRetail.Common.csproj" />
+
+    <ProjectReference Include="..\..\..\src\OrderDesk\OrderDesk.Domain\OrderDesk.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\OrderDesk\OrderDesk.Infrastructure\OrderDesk.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\OrderDesk\OrderDesk.Application\OrderDesk.Application.csproj" />
+
+    <ProjectReference Include="..\..\..\src\CustomerPortal\CustomerPortal.Domain\CustomerPortal.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\CustomerPortal\CustomerPortal.Infrastructure\CustomerPortal.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\CustomerPortal\CustomerPortal.Application\CustomerPortal.Application.csproj" />
+
+    <ProjectReference Include="..\..\..\src\FulfillmentAPI\FulfillmentAPI.Domain\FulfillmentAPI.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\FulfillmentAPI\FulfillmentAPI.Infrastructure\FulfillmentAPI.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\FulfillmentAPI\FulfillmentAPI.Application\FulfillmentAPI.Application.csproj" />
+  </ItemGroup>
+</Project>

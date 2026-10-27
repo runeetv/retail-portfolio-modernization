@@ -1,0 +1,21 @@
+@{
+    ViewData["Title"] = "Staff sign in";
+}
+<h1>Staff / warehouse sign in (PoC)</h1>
+<p>No interactive login existed in the source WPF/API apps; this PoC affordance grants a role so the Staff and Warehouse areas can be exercised.</p>
+<div class="card" style="max-width:460px">
+    <form method="post" asp-action="Staff">
+        @Html.AntiForgeryToken()
+        <p><label>Display name<br /><input name="displayName" value="Demo User" /></label></p>
+        <p><label>Role<br />
+            <select name="role">
+                <option value="SalesAgent">SalesAgent</option>
+                <option value="SalesManager">SalesManager (can override cancellation)</option>
+                <option value="CustomerService">CustomerService</option>
+                <option value="WarehouseOperator">WarehouseOperator</option>
+                <option value="Operations">Operations</option>
+            </select></label></p>
+        <p><label>Sales agent id (for quoting/orders, optional)<br /><input name="agentId" type="number" value="1" /></label></p>
+        <button class="btn" type="submit">Sign in</button>
+    </form>
+</div>

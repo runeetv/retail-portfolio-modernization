@@ -1,0 +1,97 @@
+# Entity & Domain Matches — Stage 3
+# Two measurements kept separate (per spec): (A) entity DISCOVERY, (B) multi-model / relationship accuracy.
+# Scoring unit for discovery = one physical table in ground truth (domain-entities.yaml).
+# GT physical tables: shared 8 + orderdesk 7 + portal 10 + fulfillment 15 = 40.
+version: 1
+evaluation_unit: ground_truth_physical_table
+ground_truth_file: benchmark/ground-truth/domain-entities.yaml
+prediction_file: analysis-output/portfolio/canonical-domains.yaml
+stage1_entity_files:
+  - analysis-output/orderdesk/entities.yaml
+  - analysis-output/customerportal/entities.yaml
+  - analysis-output/fulfillmentapi/entities.yaml
+
+# ---- (A) Entity discovery: does a canonical entity (CE-*) exist for each GT physical table? ----
+discovery:
+  shared_tables:
+    - { table: Customers,        predicted: CE-CUSTOMER,            found: true }
+    - { table: Products,         predicted: CE-PRODUCT,             found: true }
+    - { table: ProductCategories,predicted: CE-CATEGORY,            found: true }
+    - { table: Orders,           predicted: CE-ORDER,               found: true }
+    - { table: OrderLines,       predicted: CE-ORDER-LINE,          found: true }
+    - { table: Inventory,        predicted: CE-INVENTORY,           found: true }
+    - { table: Returns,          predicted: CE-RETURN,              found: true }
+    - { table: ReturnLines,      predicted: CE-RETURN-LINE,         found: true }
+  orderdesk_owned:
+    - { table: SalesQuotes,          predicted: CE-SALES-QUOTE,          found: true }
+    - { table: SalesQuoteLines,      predicted: CE-SALES-QUOTE-LINE,     found: true }
+    - { table: DiscountApprovals,    predicted: CE-DISCOUNT-APPROVAL,    found: true }
+    - { table: SalesAgents,          predicted: CE-SALES-AGENT,          found: true }
+    - { table: SalesAgentTasks,      predicted: CE-SALES-AGENT-TASK,     found: true }
+    - { table: SalesCommissions,     predicted: CE-SALES-COMMISSION,     found: true }
+    - { table: CancellationOverrides,predicted: CE-CANCELLATION-OVERRIDE,found: true }
+  portal_owned:
+    - { table: CustomerAccounts,       predicted: CE-CUSTOMER-ACCOUNT,     found: true }
+    - { table: ShoppingCarts,          predicted: CE-CART,                 found: true }
+    - { table: ShoppingCartItems,      predicted: CE-CART-ITEM,            found: true }
+    - { table: Wishlists,              predicted: CE-WISHLIST,             found: true }
+    - { table: WishlistItems,          predicted: CE-WISHLIST-ITEM,        found: true }
+    - { table: SupportTickets,         predicted: CE-SUPPORT-TICKET,       found: true }
+    - { table: SupportTicketMessages,  predicted: CE-SUPPORT-TICKET-MESSAGE,found: true }
+    - { table: CustomerPreferences,    predicted: CE-CUSTOMER-PREFERENCE,  found: true }
+    - { table: Coupons,                predicted: CE-COUPON,               found: true }
+    - { table: CouponRedemptions,      predicted: CE-COUPON-REDEMPTION,    found: true }
+  fulfillment_owned:
+    - { table: Warehouses,           predicted: CE-WAREHOUSE,             found: true }
+    - { table: WarehouseBins,        predicted: CE-WAREHOUSE-BIN,         found: true }
+    - { table: InventoryAllocations, predicted: CE-INVENTORY-ALLOCATION,  found: true }
+    - { table: PickLists,            predicted: CE-PICKLIST,              found: true }
+    - { table: PickListItems,        predicted: CE-PICKLIST-ITEM,         found: true }
+    - { table: Shipments,            predicted: CE-SHIPMENT,              found: true }
+    - { table: ShipmentPackages,     predicted: CE-SHIPMENT-PACKAGE,      found: true }
+    - { table: CarrierEvents,        predicted: CE-CARRIER-EVENT,         found: true }
+    - { table: ReturnReceipts,       predicted: CE-RETURN-RECEIPT,        found: true }
+    - { table: WarehouseAdjustments, predicted: CE-WAREHOUSE-ADJUSTMENT,  found: true }
+
+discovery_summary:
+  gt_tables: 40
+  discovered: 40
+  missed: 0
+  note: >
+    Every ground-truth physical table has a corresponding canonical entity in Stage 2, with the correct
+    owning app and access mode. Stage 1 per-app entity catalogs supply the underlying model->table maps.
+
+# ---- (B) Multi-model / relationship accuracy (the intentional benchmark traps) ----
+multi_model_traps:
+  - table: Orders
+    gt_models: [OrderDesk.Domain.Order, CustomerPortal.Domain.CustomerOrder, FulfillmentAPI.Domain.FulfillmentOrder]
+    predicted_entity: CE-ORDER
+    predicted_models: [OrderDesk.Domain.Order, CustomerPortal.Domain.CustomerOrder, FulfillmentAPI.Domain.FulfillmentOrder]
+    result: exact
+    note: All three C# models over one physical table correctly identified (kind=shared_table_multi_model).
+  - table: Customers
+    gt_models: [OrderDesk.Domain.Customer, CustomerPortal.Domain.ShopperProfile]
+    predicted_entity: CE-CUSTOMER
+    predicted_models: [OrderDesk.Domain.Customer, CustomerPortal.Domain.ShopperProfile]
+    result: exact
+    note: >
+      Both models over dbo.Customers identified. BONUS correctness: CustomerAccount is correctly kept
+      as a DISTINCT entity (CE-CUSTOMER-ACCOUNT, 1:1 via CustomerId), NOT collapsed into CE-CUSTOMER —
+      exactly the distinction the benchmark tests (TERM-2). This avoids the "similar name => same entity" trap.
+
+relationship_accuracy:
+  distinct_but_related_handled:
+    - CE-CUSTOMER-ACCOUNT kept separate from CE-CUSTOMER (login identity vs customer record) — correct.
+    - CE-RETURN-RECEIPT (FulfillmentAPI) kept distinct from CE-RETURN (shared) — correct.
+  physical_vs_business_relationship:
+    - SalesQuote.ConvertedOrderId -> Orders captured as a cross-domain relationship, not a shared entity — correct.
+  dto_vs_entity:
+    - WarehouseActivityRow flagged in Stage 1 FA as a reporting projection, not an operational entity — correct.
+  shared_table_not_collapsed:
+    - Three Order models and two Customer models recognized as the SAME business entity across different
+      app shapes WITHOUT collapsing distinct entities (e.g. CustomerAccount) — the core trap handled correctly.
+
+summary:
+  entity_discovery: { gt: 40, tp: 40, fn: 0 }
+  multi_model_traps: { gt: 2, exact: 2, missed: 0 }
+  relationship_accuracy: high

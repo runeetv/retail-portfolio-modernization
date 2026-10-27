@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CustomerPortal.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCoreVersion)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CustomerPortal.Domain\CustomerPortal.Domain.csproj" />
+    <ProjectReference Include="..\CustomerPortal.Infrastructure\CustomerPortal.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Shared\LegacyRetail.Common\LegacyRetail.Common.csproj" />
+  </ItemGroup>
+</Project>

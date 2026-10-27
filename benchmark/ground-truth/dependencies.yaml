@@ -1,0 +1,63 @@
+# Dependency map (ground truth): code + database dependencies.
+version: 1
+
+shared_code:
+  LegacyRetail.Common:
+    purpose: Infrastructure utilities ONLY (no business logic / no entities).
+    consumed_by: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL, DbProvisioner, IntegrationTests]
+    members:
+      - DbConnectionConfig (connection string resolution, env override LEGACYRETAIL_CONNECTION)
+      - PasswordHasher (PBKDF2)
+
+database:
+  name: LegacyRetailDB
+  provider: SQL Server (LocalDB by default)
+  schema_owner: database/provisioning/DbProvisioner
+  contexts:
+    - OrderDesk.Infrastructure.OrderDeskDbContext
+    - CustomerPortal.Infrastructure.PortalDbContext
+    - FulfillmentAPI.Infrastructure.FulfillmentDbContext
+  note: No single universal DbContext. Each app maps only the tables/columns it needs.
+
+cross_app_db_dependencies:
+  - from: APP-ORDERDESK
+    reads_table: Shipments
+    owner: APP-FULFILL
+    via: OrderService.GetShipmentsAsync (ShipmentStatusView)
+  - from: APP-PORTAL
+    reads_table: Shipments, CarrierEvents
+    owner: APP-FULFILL
+    via: TrackingService.GetOrderTrackingAsync (TrackedShipment, TrackingEvent)
+  - from: APP-FULFILL
+    reads_table: Customers (shipping fields), Orders, OrderLines
+    owner: shared / produced by APP-ORDERDESK + APP-PORTAL
+  - from: APP-FULFILL
+    writes_table: Inventory (restock via usp_ReceiveReturnAndAdjust), Returns.ReturnStatus -> 'Received'
+    note: Returns row originally created by APP-PORTAL and approved by APP-ORDERDESK.
+  - from: APP-ORDERDESK
+    writes_table: Returns.ReturnStatus -> 'Approved'/'Rejected'
+    note: Return row created by APP-PORTAL.
+
+stored_procedures:
+  - name: usp_ConvertQuoteToOrder
+    owner_app: APP-ORDERDESK
+    touches: [SalesQuotes, SalesQuoteLines, Orders, OrderLines, SalesCommissions, Customers, SalesAgents]
+  - name: usp_EvaluateCancellationEligibility
+    owner_app: APP-ORDERDESK
+    touches: [Orders]
+  - name: usp_AllocateInventory
+    owner_app: APP-FULFILL
+    touches: [Orders, OrderLines, Inventory, InventoryAllocations]
+  - name: usp_ReceiveReturnAndAdjust
+    owner_app: APP-FULFILL
+    touches: [Returns, ReturnLines, ReturnReceipts, Inventory, WarehouseAdjustments]
+  - name: usp_WarehouseActivitySummary
+    owner_app: APP-FULFILL
+    touches: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+    note: Complex query joining fulfillment + shared + OrderDesk domains.
+
+nuget_packages:
+  - Microsoft.EntityFrameworkCore.SqlServer 10.0.14
+  - Microsoft.Data.SqlClient 6.1.7
+  - Swashbuckle.AspNetCore 10.3.1 (FulfillmentAPI)
+  - xunit 2.9.2 / Microsoft.NET.Test.Sdk 17.12.0 (tests)

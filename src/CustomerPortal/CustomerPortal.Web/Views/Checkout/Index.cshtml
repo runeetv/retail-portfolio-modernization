@@ -1,0 +1,30 @@
+@model CheckoutViewModel
+@{
+    ViewData["Title"] = "Checkout";
+}
+<h2>Checkout</h2>
+@if (!string.IsNullOrEmpty(Model.Error))
+{
+    <div class="alert alert-danger">@Model.Error</div>
+}
+@if (Model.ItemCount == 0)
+{
+    <p>Your cart is empty.</p>
+}
+else
+{
+    <ul class="list-group mb-3">
+        <li class="list-group-item d-flex justify-content-between">Items<span>@Model.ItemCount</span></li>
+        @if (!string.IsNullOrEmpty(Model.AppliedCoupon))
+        {
+            <li class="list-group-item d-flex justify-content-between">Coupon<span>@Model.AppliedCoupon</span></li>
+        }
+        <li class="list-group-item d-flex justify-content-between"><strong>Subtotal</strong><strong>@Model.SubTotal.ToString("C")</strong></li>
+    </ul>
+    <form asp-action="Place" method="post">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="idempotencyKey" value="@Model.IdempotencyKey" />
+        <button type="submit" class="btn btn-success btn-lg">Place order</button>
+    </form>
+    <p class="text-muted mt-2">Inventory is re-checked and the order is created idempotently (safe against double submit).</p>
+}

@@ -1,0 +1,18 @@
+@model List<OrderDesk.Domain.Product>
+@{
+    ViewData["Title"] = "Catalog";
+}
+<h1>Catalog (staff)</h1>
+<form method="get" class="card">
+    <input name="term" value="@ViewBag.Term" placeholder="name or SKU" />
+    <button class="btn" type="submit">Search</button>
+</form>
+<table>
+    <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Price</th></tr></thead>
+    <tbody>
+    @foreach (var p in Model)
+    {
+        <tr><td>@p.Sku</td><td>@p.Name</td><td>@p.Category?.Name</td><td>@p.UnitPrice.ToString("C")</td></tr>
+    }
+    </tbody>
+</table>

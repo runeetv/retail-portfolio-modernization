@@ -1,0 +1,14 @@
+@{
+    ViewData["Title"] = "New staff order";
+}
+<h1>New staff-assisted order</h1>
+<div class="card" style="max-width:460px">
+    <form method="post">
+        @Html.AntiForgeryToken()
+        <p><label>Customer id<br /><input name="customerId" type="number" required /></label></p>
+        <p><label>Product id<br /><input name="productId" type="number" required /></label></p>
+        <p><label>Quantity<br /><input name="quantity" type="number" value="1" min="1" /></label></p>
+        <button class="btn" type="submit">Create order</button>
+    </form>
+    <p style="color:#64748b;font-size:13px">Validates mandatory customer info + stock availability; OrderSource = 'OrderDesk'.</p>
+</div>

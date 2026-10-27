@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OrderDesk.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.7" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.22" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderDesk.Domain\OrderDesk.Domain.csproj" />
+    <ProjectReference Include="..\OrderDesk.Infrastructure\OrderDesk.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

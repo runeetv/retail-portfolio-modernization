@@ -1,0 +1,292 @@
+<Window x:Class="OrderDesk.Desktop.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:OrderDesk.Desktop.ViewModels"
+        Title="OrderDesk - Internal Sales &amp; Order Management" Height="760" Width="1180"
+        WindowStartupLocation="CenterScreen">
+    <Window.DataContext>
+        <vm:MainViewModel/>
+    </Window.DataContext>
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="#1F3A5F" Padding="12,8">
+            <TextBlock Text="OrderDesk" Foreground="White" FontSize="20" FontWeight="Bold"/>
+        </Border>
+        <TabControl Margin="6">
+
+            <!-- Customers -->
+            <TabItem Header="Customers" DataContext="{Binding Customers}">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Grid.Row="0">
+                        <TextBlock Text="Search:" VerticalAlignment="Center" Margin="4"/>
+                        <TextBox Width="260" Margin="4" Text="{Binding SearchTerm, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Content="Search" Command="{Binding SearchCommand}"/>
+                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/>
+                            <ColumnDefinition Width="3*"/>
+                        </Grid.ColumnDefinitions>
+                        <DataGrid Grid.Column="0" ItemsSource="{Binding Customers}" SelectedItem="{Binding Selected}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Id" Binding="{Binding CustomerId}" Width="50"/>
+                                <DataGridTextColumn Header="Name" Binding="{Binding FullName}" Width="*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding CustomerStatus}" Width="80"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Column="1" Margin="12,0" IsEnabled="{Binding HasSelection}">
+                            <TextBlock Text="Edit contact information" Style="{StaticResource Header}"/>
+                            <TextBlock Text="First name"/>
+                            <TextBox Text="{Binding Selected.FirstName, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Last name"/>
+                            <TextBox Text="{Binding Selected.LastName, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Email"/>
+                            <TextBox Text="{Binding Selected.Email, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Phone"/>
+                            <TextBox Text="{Binding Selected.Phone, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Shipping address"/>
+                            <TextBox Text="{Binding Selected.ShipAddressLine, UpdateSourceTrigger=PropertyChanged}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/><ColumnDefinition/><ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"><TextBlock Text="City"/><TextBox Text="{Binding Selected.ShipCity, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                <StackPanel Grid.Column="1"><TextBlock Text="Region"/><TextBox Text="{Binding Selected.ShipRegion, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                <StackPanel Grid.Column="2"><TextBlock Text="Postal"/><TextBox Text="{Binding Selected.ShipPostalCode, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                            </Grid>
+                            <Button Content="Save changes" HorizontalAlignment="Left" Command="{Binding SaveCommand}"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                </Grid>
+            </TabItem>
+
+            <!-- Products -->
+            <TabItem Header="Products" DataContext="{Binding Products}">
+                <DockPanel Margin="8">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Top">
+                        <TextBlock Text="Search:" VerticalAlignment="Center" Margin="4"/>
+                        <TextBox Width="260" Margin="4" Text="{Binding SearchTerm, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Content="Search" Command="{Binding SearchCommand}"/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                    <DataGrid ItemsSource="{Binding Products}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Id" Binding="{Binding ProductId}" Width="50"/>
+                            <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="90"/>
+                            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="140"/>
+                            <DataGridTextColumn Header="Price" Binding="{Binding UnitPrice, StringFormat=C}" Width="90"/>
+                            <DataGridTextColumn Header="Available" Binding="{Binding Available}" Width="80"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Quotations -->
+            <TabItem Header="Quotations" DataContext="{Binding Quotes}">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <WrapPanel Grid.Row="0">
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}"/>
+                        <TextBlock Text="Customer Id:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <TextBox Width="60" Text="{Binding NewCustomerId, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Agent:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <ComboBox Width="150" ItemsSource="{Binding Agents}" DisplayMemberPath="FullName"
+                                  SelectedValuePath="SalesAgentId" SelectedValue="{Binding NewAgentId}"/>
+                        <Button Content="Create quote" Command="{Binding CreateCommand}"/>
+                    </WrapPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*"/>
+                            <ColumnDefinition Width="2*"/>
+                        </Grid.ColumnDefinitions>
+                        <DataGrid Grid.Column="0" ItemsSource="{Binding Quotes}" SelectedItem="{Binding Selected}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Quote #" Binding="{Binding QuoteNumber}" Width="110"/>
+                                <DataGridTextColumn Header="Customer" Binding="{Binding Customer.FullName}" Width="*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding QuoteStatus}" Width="110"/>
+                                <DataGridTextColumn Header="Disc %" Binding="{Binding DiscountPercent}" Width="60"/>
+                                <DataGridTextColumn Header="Total" Binding="{Binding GrandTotal, StringFormat=C}" Width="90"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Column="1" Margin="12,0" IsEnabled="{Binding HasSelection}">
+                            <TextBlock Text="Selected quote actions" Style="{StaticResource Header}"/>
+                            <TextBlock Text="Add line - Product Id / Qty"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox Width="70" Text="{Binding LineProductId, UpdateSourceTrigger=PropertyChanged}"/>
+                                <TextBox Width="50" Margin="4,0" Text="{Binding LineQuantity, UpdateSourceTrigger=PropertyChanged}"/>
+                                <Button Content="Add line" Command="{Binding AddLineCommand}"/>
+                            </StackPanel>
+                            <TextBlock Text="Apply discount %" Margin="0,8,0,0"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox Width="70" Text="{Binding DiscountPercent, UpdateSourceTrigger=PropertyChanged}"/>
+                                <Button Content="Apply discount" Command="{Binding ApplyDiscountCommand}"/>
+                            </StackPanel>
+                            <TextBlock Text="(Discounts above 15% require approval)" FontStyle="Italic" Foreground="#777"/>
+                            <Button Content="Convert to order" Margin="0,8,0,0" HorizontalAlignment="Left" Command="{Binding ConvertCommand}"/>
+                            <TextBlock Text="(Only approved, non-expired quotes convert)" FontStyle="Italic" Foreground="#777"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                </Grid>
+            </TabItem>
+
+            <!-- Orders -->
+            <TabItem Header="Orders" DataContext="{Binding Orders}">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <WrapPanel Grid.Row="0">
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}"/>
+                        <TextBlock Text="Filter status:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <TextBox Width="120" Text="{Binding FilterStatus, UpdateSourceTrigger=PropertyChanged}"/>
+                    </WrapPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*"/>
+                            <ColumnDefinition Width="2*"/>
+                        </Grid.ColumnDefinitions>
+                        <DataGrid Grid.Column="0" ItemsSource="{Binding Orders}" SelectedItem="{Binding Selected}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Order #" Binding="{Binding OrderNumber}" Width="130"/>
+                                <DataGridTextColumn Header="Customer" Binding="{Binding Customer.FullName}" Width="*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding OrderStatus}" Width="90"/>
+                                <DataGridTextColumn Header="Source" Binding="{Binding OrderSource}" Width="110"/>
+                                <DataGridTextColumn Header="Total" Binding="{Binding GrandTotal, StringFormat=C}" Width="90"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Column="1" Margin="12,0" IsEnabled="{Binding HasSelection}">
+                            <TextBlock Text="Order lines" Style="{StaticResource Header}"/>
+                            <DataGrid ItemsSource="{Binding SelectedLines}" Height="140">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Product" Binding="{Binding Product.Name}" Width="*"/>
+                                    <DataGridTextColumn Header="Qty" Binding="{Binding Quantity}" Width="50"/>
+                                    <DataGridTextColumn Header="Price" Binding="{Binding UnitPrice, StringFormat=C}" Width="80"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="Shipments (read-only, from FulfillmentAPI)" Style="{StaticResource Header}"/>
+                            <DataGrid ItemsSource="{Binding Shipments}" Height="90">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding ShipmentStatus}" Width="90"/>
+                                    <DataGridTextColumn Header="Carrier" Binding="{Binding Carrier}" Width="80"/>
+                                    <DataGridTextColumn Header="Tracking" Binding="{Binding TrackingNumber}" Width="*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="Cancel order" Style="{StaticResource Header}"/>
+                            <TextBlock Text="Acting Agent Id"/>
+                            <TextBox Width="60" HorizontalAlignment="Left" Text="{Binding ActingAgentId, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Reason"/>
+                            <TextBox Text="{Binding CancelReason, UpdateSourceTrigger=PropertyChanged}"/>
+                            <CheckBox Content="Force override (authorized agents only)" IsChecked="{Binding ForceOverride}" Margin="0,4"/>
+                            <TextBlock Text="Override justification"/>
+                            <TextBox Text="{Binding OverrideJustification, UpdateSourceTrigger=PropertyChanged}"/>
+                            <Button Content="Cancel order" HorizontalAlignment="Left" Command="{Binding CancelCommand}"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                </Grid>
+            </TabItem>
+
+            <!-- Discount Approvals -->
+            <TabItem Header="Discount Approvals" DataContext="{Binding Approvals}">
+                <DockPanel Margin="8">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Top">
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}"/>
+                        <TextBlock Text="Deciding Agent Id:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <TextBox Width="60" Text="{Binding DecidingAgentId, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Notes:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <TextBox Width="220" Text="{Binding Notes, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Content="Approve" Command="{Binding ApproveCommand}"/>
+                        <Button Content="Reject" Command="{Binding RejectCommand}"/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                    <DataGrid ItemsSource="{Binding Pending}" SelectedItem="{Binding Selected}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Approval Id" Binding="{Binding DiscountApprovalId}" Width="90"/>
+                            <DataGridTextColumn Header="Quote #" Binding="{Binding SalesQuote.QuoteNumber}" Width="120"/>
+                            <DataGridTextColumn Header="Requested %" Binding="{Binding RequestedPercent}" Width="100"/>
+                            <DataGridTextColumn Header="Notes" Binding="{Binding Notes}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Returns -->
+            <TabItem Header="Returns" DataContext="{Binding Returns}">
+                <DockPanel Margin="8">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Top">
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}"/>
+                        <TextBlock Text="Agent Id:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <TextBox Width="60" Text="{Binding AgentId, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Content="Approve" Command="{Binding ApproveCommand}"/>
+                        <Button Content="Reject" Command="{Binding RejectCommand}"/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                    <DataGrid ItemsSource="{Binding Returns}" SelectedItem="{Binding Selected}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Return #" Binding="{Binding ReturnNumber}" Width="120"/>
+                            <DataGridTextColumn Header="Order Id" Binding="{Binding OrderId}" Width="80"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding ReturnStatus}" Width="100"/>
+                            <DataGridTextColumn Header="Reason" Binding="{Binding Reason}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Agent Tasks -->
+            <TabItem Header="Agent Tasks" DataContext="{Binding Tasks}">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <WrapPanel Grid.Row="0">
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}"/>
+                        <TextBlock Text="Agent:" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                        <ComboBox Width="180" ItemsSource="{Binding Agents}" DisplayMemberPath="FullName" SelectedItem="{Binding SelectedAgent}"/>
+                        <Button Content="Mark In Progress" Command="{Binding MarkInProgressCommand}"/>
+                        <Button Content="Mark Done" Command="{Binding MarkDoneCommand}"/>
+                    </WrapPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*"/>
+                            <ColumnDefinition Width="2*"/>
+                        </Grid.ColumnDefinitions>
+                        <DataGrid Grid.Column="0" ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding TaskStatus}" Width="100"/>
+                                <DataGridTextColumn Header="Due" Binding="{Binding DueUtc, StringFormat=d}" Width="100"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <DockPanel Grid.Column="1" Margin="12,0">
+                            <TextBlock DockPanel.Dock="Top" Text="Commissions" Style="{StaticResource Header}"/>
+                            <DataGrid ItemsSource="{Binding Commissions}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Order Id" Binding="{Binding OrderId}" Width="80"/>
+                                    <DataGridTextColumn Header="Order Value" Binding="{Binding OrderValue, StringFormat=C}" Width="110"/>
+                                    <DataGridTextColumn Header="Commission" Binding="{Binding CommissionAmount, StringFormat=C}" Width="110"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Grid>
+                    <TextBlock Grid.Row="2" Text="{Binding Status}" Margin="4" Foreground="#555"/>
+                </Grid>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
+</Window>

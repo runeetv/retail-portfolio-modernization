@@ -1,0 +1,80 @@
+# FulfillmentAPI — Evidence Index
+# Maps analysis to inspected source/SQL/test evidence. Paths are repo-relative.
+version: 1
+application: FulfillmentAPI
+
+inspected_sources:
+  domain:
+    - src/FulfillmentAPI/FulfillmentAPI.Domain/Entities.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentAPI.Domain.csproj
+  infrastructure:
+    - src/FulfillmentAPI/FulfillmentAPI.Infrastructure/FulfillmentDbContext.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Infrastructure/FulfillmentAPI.Infrastructure.csproj
+  application:
+    - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/ApiResult.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentAPI.Application.csproj
+  api:
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Program.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/appsettings.json
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Security/ApiKeyMiddleware.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Middleware/ExceptionHandlingMiddleware.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Models/Requests.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/FulfillmentControllerBase.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/OrdersController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/InventoryController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/PickingController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/ShipmentsController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/ReturnsController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/Controllers/WarehousesController.cs
+    - src/FulfillmentAPI/FulfillmentAPI.Api/FulfillmentAPI.Api.csproj
+    - src/FulfillmentAPI/FulfillmentAPI.Api/FulfillmentAPI.http (sample requests; reviewed)
+  shared_infra:
+    - src/Shared/LegacyRetail.Common/DbConnectionConfig.cs
+  sql:
+    - database/procedures/procedures.sql  # usp_AllocateInventory, usp_ReceiveReturnAndAdjust, usp_WarehouseActivitySummary (bodies inspected)
+    - database/schema/04_fulfillment.sql  # fulfillment-owned tables + constraints
+    - database/schema/01_schema.sql       # shared tables it reads/writes (Orders/OrderLines/Inventory/Returns/ReturnLines/Products/Customers)
+  tests:
+    - tests/FulfillmentAPI.Tests/FulfillmentRulesTests.cs
+    - tests/IntegrationTests/FulfillmentWorkflowTests.cs
+
+tests_executed:
+  - command: dotnet test tests/FulfillmentAPI.Tests/FulfillmentAPI.Tests.csproj
+    result: Passed 18/18
+    verifies: [FA-RULE-006, FA-RULE-009, FA-RULE-015, FA-RULE-016]
+  - command: dotnet test tests/IntegrationTests (filter FulfillmentWorkflowTests)
+    result: Passed 6/6
+    verifies: [FA-CAP-003, FA-CAP-004, FA-CAP-005, FA-CAP-006, FA-CAP-007, FA-CAP-008, FA-CAP-010,
+               FA-RULE-003, FA-RULE-004, FA-RULE-005, FA-RULE-012, FA-RULE-014, FA-RULE-016, FA-RULE-017, FA-RULE-018, FA-RULE-019, FA-RULE-020, FA-RULE-021]
+    environment: LegacyRetailDB on (localdb)\\MSSQLLocalDB (pre-provisioned; disposable rows via TestData)
+
+id_cross_reference:
+  capabilities_file: analysis-output/fulfillmentapi/capabilities.yaml
+  entities_file: analysis-output/fulfillmentapi/entities.yaml
+  rules_file: analysis-output/fulfillmentapi/business-rules.yaml
+  workflows_file: analysis-output/fulfillmentapi/workflows.yaml
+  dependencies_file: analysis-output/fulfillmentapi/dependencies.yaml
+  state_machines_file: analysis-output/fulfillmentapi/state-machines.md
+
+key_evidence_map:
+  FA-CAP-003:  # allocation
+    - src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs:AllocateAsync
+    - database/procedures/procedures.sql:usp_AllocateInventory
+    - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Allocation_reserves_stock_and_blocks_over_allocation
+  FA-CAP-010:  # return receipt
+    - src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs:ReceiveAsync
+    - database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust
+    - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Return_receipt_restocks_inventory_and_is_idempotent_and_requires_approval
+  FA-RULE-016: # dispatch guard
+    - src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentRules.cs:CanDispatch
+    - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Full_warehouse_flow_allocate_pick_package_dispatch
+
+unresolved_or_uninspected:
+  - dbo.SalesAgents DDL not inspected (not a FulfillmentAPI table; read only inside usp_WarehouseActivitySummary; external).
+  - FulfillmentRules.CanCreatePickList is defined but not invoked by PickingService (dead/unused helper; see analysis-gaps GAP-001).

@@ -1,0 +1,62 @@
+@model CatalogViewModel
+@{
+    ViewData["Title"] = "Shop";
+}
+<h2>Shop</h2>
+<form method="get" class="row g-2 mb-3">
+    <div class="col-auto">
+        <input name="term" value="@Model.Term" class="form-control" placeholder="Search products" />
+    </div>
+    <div class="col-auto">
+        <select name="categoryId" class="form-select">
+            <option value="">All categories</option>
+            @foreach (var c in Model.Categories)
+            {
+                if (Model.CategoryId == c.CategoryId)
+                {
+                    <option value="@c.CategoryId" selected>@c.Name</option>
+                }
+                else
+                {
+                    <option value="@c.CategoryId">@c.Name</option>
+                }
+            }
+        </select>
+    </div>
+    <div class="col-auto"><button class="btn btn-primary">Search</button></div>
+</form>
+
+<div class="row">
+    @foreach (var p in Model.Products)
+    {
+        var avail = Model.Availability.TryGetValue(p.ProductId, out var a) ? a : 0;
+        <div class="col-md-4 mb-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">@p.Name</h5>
+                    <h6 class="card-subtitle mb-2 text-muted">@p.Category?.Name</h6>
+                    <p class="card-text">
+                        <strong>@p.UnitPrice.ToString("C")</strong><br />
+                        @if (avail > 0)
+                        {
+                            <span class="badge bg-success">@avail in stock</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">Out of stock</span>
+                        }
+                    </p>
+                    <a asp-action="Details" asp-route-id="@p.ProductId" class="btn btn-sm btn-outline-primary">Details</a>
+                    @if (User.Identity?.IsAuthenticated == true)
+                    {
+                        <form asp-controller="Cart" asp-action="Add" method="post" class="d-inline">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="productId" value="@p.ProductId" />
+                            <button class="btn btn-sm btn-primary">Add to cart</button>
+                        </form>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>

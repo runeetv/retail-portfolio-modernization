@@ -1,0 +1,23 @@
+@model SupportTicketCreateViewModel
+@{
+    ViewData["Title"] = "New ticket";
+}
+<h2>New support ticket</h2>
+<form method="post" asp-action="Create">
+    @Html.AntiForgeryToken()
+    <div asp-validation-summary="All" class="text-danger"></div>
+    <div class="mb-3">
+        <label class="form-label">Subject</label>
+        <input asp-for="Subject" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Related order id (optional)</label>
+        <input asp-for="RelatedOrderId" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Message</label>
+        <textarea asp-for="Body" class="form-control" rows="4"></textarea>
+    </div>
+    <button class="btn btn-primary">Submit</button>
+    <a asp-action="Index" class="btn btn-link">Cancel</a>
+</form>

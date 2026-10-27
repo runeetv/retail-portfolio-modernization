@@ -1,0 +1,62 @@
+@{
+    ViewData["Title"] = "Agent tasks & commissions";
+    var agents = ViewBag.Agents as List<OrderDesk.Domain.SalesAgent> ?? new();
+    var tasks = ViewBag.Tasks as List<OrderDesk.Domain.SalesAgentTask> ?? new();
+    var commissions = ViewBag.Commissions as List<OrderDesk.Domain.SalesCommission> ?? new();
+    int selected = ViewBag.SelectedAgentId ?? 0;
+}
+<h1>Agent tasks &amp; commissions</h1>
+<form method="get" class="card">
+    <select name="agentId">
+        @foreach (var a in agents)
+        {
+            <option value="@a.SalesAgentId" selected="@(a.SalesAgentId == selected)">@a.FullName (@a.AgentCode)</option>
+        }
+    </select>
+    <button class="btn" type="submit">View</button>
+</form>
+
+<h3>Tasks</h3>
+@if (tasks.Count == 0) { <p>No active tasks.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Title</th><th>Status</th><th>Due</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var t in tasks)
+        {
+            <tr>
+                <td>@t.Title</td>
+                <td>@t.TaskStatus</td>
+                <td>@(t.DueUtc?.ToString("yyyy-MM-dd"))</td>
+                <td>
+                    <form class="inline" method="post" asp-action="UpdateTask">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="taskId" value="@t.SalesAgentTaskId" />
+                        <input type="hidden" name="agentId" value="@selected" />
+                        <select name="status">
+                            <option>Open</option><option>InProgress</option><option>Done</option><option>Cancelled</option>
+                        </select>
+                        <button class="btn secondary" type="submit">Update</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<h3>Commissions</h3>
+@if (commissions.Count == 0) { <p>No commissions.</p> }
+else
+{
+    <table>
+        <thead><tr><th>Order</th><th>Order value</th><th>Discount %</th><th>Commission</th><th>When</th></tr></thead>
+        <tbody>
+        @foreach (var c in commissions)
+        {
+            <tr><td>@c.OrderId</td><td>@c.OrderValue.ToString("C")</td><td>@c.DiscountPercent</td><td>@c.CommissionAmount.ToString("C")</td><td>@c.CreatedUtc.ToString("yyyy-MM-dd")</td></tr>
+        }
+        </tbody>
+    </table>
+}

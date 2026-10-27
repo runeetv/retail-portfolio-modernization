@@ -1,0 +1,826 @@
+# Unified Capability Catalog — LegacyRetailPortfolio consolidation (Stage 4, planning only)
+# Every existing Stage 1 capability (47) gets an explicit disposition. None discarded.
+# Evidence tier legend on each entry:
+#   verified  = behavior/source-verified in Stage 1-3
+#   proposed  = target design decision (this document)
+# disposition: migrate_as_is | migrate_unified | migrate_with_context_policy | migrate_api_compat | business_decision_required
+# target_module ids are defined in module-ownership-matrix.yaml
+version: 1
+source_inputs:
+  stage1: [analysis-output/orderdesk, analysis-output/customerportal, analysis-output/fulfillmentapi]
+  stage2: analysis-output/portfolio
+  stage3: evaluation-output
+target: Single ASP.NET Core .NET 10 modular monolith (web UI + API compatibility layer)
+
+target_modules_index:
+  - MOD-IDENTITY     # auth + account + profile
+  - MOD-CUSTOMER     # customer record management (staff + self-service)
+  - MOD-CATALOG      # products, categories, availability (read)
+  - MOD-QUOTING      # quotes, discounts, approvals, commission (staff)
+  - MOD-ORDER        # order capture + lifecycle + cancellation
+  - MOD-SHOPPING     # cart, coupons, wishlist (customer)
+  - MOD-FULFILLMENT  # allocation, picking, packaging, dispatch
+  - MOD-SHIPMENT     # shipments, carrier events, tracking
+  - MOD-RETURNS      # return request -> review -> receipt
+  - MOD-SUPPORT      # support tickets
+  - MOD-SALESOPS     # agent tasks, commission display
+  - MOD-REPORTING    # warehouse activity summary
+  - MOD-PLATFORM     # cross-cutting: authZ, error handling, API key adapter, DbContext(s)
+
+capabilities:
+  # ======================= OrderDesk (16) =======================
+  - id: OD-CAP-001
+    source_app: OrderDesk
+    name: Search customers
+    purpose: Staff find customers by name/email (cap 200).
+    actors: [Sales staff, CS staff]
+    rules: []
+    inputs: [search term]
+    outputs: [Customer list]
+    entities: [Customers]
+    workflows: []
+    target_web_feature: Staff "Customers" search screen
+    target_module: MOD-CUSTOMER
+    functional_parity: Same search fields + 200 cap; staff-only authorization.
+    evidence: {tier: verified, ref: "analysis-output/orderdesk/capabilities.yaml#OD-CAP-001"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-002
+    source_app: OrderDesk
+    name: Update customer contact information (full)
+    purpose: Staff edit full contact + shipping record; email required + unique.
+    actors: [Sales staff, CS staff]
+    rules: [OD-RULE-020]
+    inputs: [Customer edited fields]
+    outputs: [updated Customer / validation error]
+    entities: [Customers]
+    workflows: []
+    target_web_feature: Staff customer edit form (full field set)
+    target_module: MOD-CUSTOMER
+    functional_parity: Full-field edit retained for staff; email-required + UQ_Customers_Email preserved. Partial overlap with CP-CAP-003 (see RECON-CUSTOMER).
+    evidence: {tier: verified, ref: "OD-CAP-002; OD-RULE-020"}
+    disposition: migrate_with_context_policy
+
+  - id: OD-CAP-003
+    source_app: OrderDesk
+    name: Browse / search product catalog (staff)
+    purpose: Staff browse active products + available qty.
+    actors: [Sales staff]
+    rules: [OD-RULE-011]
+    inputs: [search term]
+    outputs: [Product list + availability]
+    entities: [Products, ProductCategories, Inventory]
+    workflows: []
+    target_web_feature: Staff catalog view
+    target_module: MOD-CATALOG
+    functional_parity: Non-discontinued filter preserved; shares catalog read service with CP (see RECON-CATALOG).
+    evidence: {tier: verified, ref: "OD-CAP-003; OD-RULE-011"}
+    disposition: migrate_unified
+
+  - id: OD-CAP-004
+    source_app: OrderDesk
+    name: Check inventory availability (pre-order)
+    purpose: Read-only OnHand-Allocated check before staff order.
+    actors: [Sales staff]
+    rules: [OD-RULE-007]
+    inputs: [productId, quantity]
+    outputs: [available boolean/qty]
+    entities: [Inventory]
+    workflows: []
+    target_web_feature: Availability check in order/quote flow
+    target_module: MOD-CATALOG
+    functional_parity: Read-only availability expression shared (see DUP-AVAIL reconciliation); must NOT mutate inventory.
+    evidence: {tier: verified, ref: "OD-CAP-004; OD-RULE-007"}
+    disposition: migrate_unified
+
+  - id: OD-CAP-005
+    source_app: OrderDesk
+    name: Create sales quotation
+    purpose: Draft quote with number + expiry (default 14d).
+    actors: [Sales agent]
+    rules: [OD-RULE-001]
+    inputs: [customerId, agentId, validityDays]
+    outputs: [SalesQuote Draft]
+    entities: [SalesQuotes, Customers, SalesAgents]
+    workflows: [WF-A]
+    target_web_feature: Quote create screen
+    target_module: MOD-QUOTING
+    functional_parity: 14-day default expiry preserved.
+    evidence: {tier: verified, ref: "OD-CAP-005; OD-RULE-001"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-006
+    source_app: OrderDesk
+    name: Add quotation line items
+    purpose: Add/merge lines on Draft/Pending quote; recompute totals.
+    actors: [Sales agent]
+    rules: [OD-RULE-002, OD-RULE-012, OD-RULE-013]
+    inputs: [quoteId, productId, quantity]
+    outputs: [updated quote totals]
+    entities: [SalesQuotes, SalesQuoteLines, Products]
+    workflows: [WF-A]
+    target_web_feature: Quote line editor
+    target_module: MOD-QUOTING
+    functional_parity: Merge-on-duplicate + edit-only-in-Draft/Pending preserved.
+    evidence: {tier: verified, ref: "OD-CAP-006"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-007
+    source_app: OrderDesk
+    name: Apply discount (with approval routing)
+    purpose: Apply % discount; >15% routes to approval.
+    actors: [Sales agent]
+    rules: [OD-RULE-003, OD-RULE-013]
+    inputs: [quoteId, discountPercent]
+    outputs: [Approved or PendingApproval]
+    entities: [SalesQuotes, DiscountApprovals]
+    workflows: [WF-A]
+    target_web_feature: Discount apply + approval routing
+    target_module: MOD-QUOTING
+    functional_parity: 15% threshold preserved exactly.
+    evidence: {tier: verified, ref: "OD-CAP-007; OD-RULE-003"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-008
+    source_app: OrderDesk
+    name: Approve/reject pending discount
+    purpose: Decide a DiscountApproval once; move quote Approved/Rejected.
+    actors: [Approving agent/manager]
+    rules: [OD-RULE-004]
+    inputs: [approvalId, approve, agentId, notes]
+    outputs: [decided approval]
+    entities: [DiscountApprovals, SalesQuotes]
+    workflows: [WF-A]
+    target_web_feature: Discount approvals queue
+    target_module: MOD-QUOTING
+    functional_parity: Decide-once + records agent/time/notes preserved.
+    evidence: {tier: verified, ref: "OD-CAP-008; OD-RULE-004"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-009
+    source_app: OrderDesk
+    name: Convert approved quotation to order
+    purpose: Convert Approved/non-expired/not-converted quote via usp_ConvertQuoteToOrder (+commission).
+    actors: [Sales agent]
+    rules: [OD-RULE-005, OD-RULE-006, OD-RULE-008, OD-RULE-009, OD-RULE-010]
+    inputs: [quoteId]
+    outputs: [new OrderId / failure]
+    entities: [SalesQuotes, Orders, OrderLines, SalesCommissions]
+    workflows: [WF-A]
+    target_web_feature: Convert-to-order action
+    target_module: MOD-QUOTING
+    functional_parity: SQL proc retained as-is initially; dual-location mandatory-info guard reconciled (RECON-MANDATORY). Creates Orders row consumed by MOD-FULFILLMENT.
+    evidence: {tier: verified, ref: "OD-CAP-009; procedures.sql#usp_ConvertQuoteToOrder"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-010
+    source_app: OrderDesk
+    name: Create staff-assisted order
+    purpose: Direct Confirmed order (not via quote); validates info/agent/stock.
+    actors: [Sales agent]
+    rules: [OD-RULE-007, OD-RULE-010, OD-RULE-016]
+    inputs: [customerId, agentId, lines]
+    outputs: [new OrderId / failure]
+    entities: [Orders, OrderLines, Customers, Inventory]
+    workflows: [WF-A]
+    target_web_feature: Staff order create form (currently service-only; UI entry point to be ADDED)
+    target_module: MOD-ORDER
+    functional_parity: "OrderSource='OrderDesk'; stock pre-check preserved. GAP - Stage 1 noted no WPF UI entry point (OD-CAP-010 notes); target web must add one."
+    evidence: {tier: verified, ref: "OD-CAP-010 (notes: UI entry point unresolved)"}
+    disposition: migrate_with_context_policy
+
+  - id: OD-CAP-011
+    source_app: OrderDesk
+    name: View order details/status (staff, unrestricted)
+    purpose: List/view any order + lines.
+    actors: [Sales staff, CS staff]
+    rules: []
+    inputs: [status filter, orderId]
+    outputs: [order list/detail]
+    entities: [Orders, OrderLines, Customers]
+    workflows: []
+    target_web_feature: Staff order list/detail
+    target_module: MOD-ORDER
+    functional_parity: Unrestricted staff read scope (contrast CP ownership-scoped CP-CAP-010). See RECON-ORDER-VIEW.
+    evidence: {tier: verified, ref: "OD-CAP-011"}
+    disposition: migrate_with_context_policy
+
+  - id: OD-CAP-012
+    source_app: OrderDesk
+    name: Cancel order with authorized override
+    purpose: Staff cancel via usp_EvaluateCancellationEligibility; override+audit if ineligible.
+    actors: [Sales/CS staff; authorized agent for override]
+    rules: [OD-RULE-014, OD-RULE-015, OD-RULE-017]
+    inputs: [orderId, agentId, reason, forceOverride, justification]
+    outputs: [Cancelled / failure]
+    entities: [Orders, SalesAgents, CancellationOverrides]
+    workflows: [WF-D]
+    target_web_feature: Staff cancel + override dialog
+    target_module: MOD-ORDER
+    functional_parity: Staff eligibility (Pending/Confirmed/Allocated) + override-with-audit preserved. Bounded divergence vs CP (RECON-CANCEL) is a business decision to KEEP.
+    evidence: {tier: verified, ref: "OD-CAP-012; OD-RULE-014/015"}
+    disposition: migrate_with_context_policy
+
+  - id: OD-CAP-013
+    source_app: OrderDesk
+    name: Review customer return (approve/reject)
+    purpose: Staff transition 'Requested' return to Approved/Rejected.
+    actors: [Sales/CS staff]
+    rules: [OD-RULE-018]
+    inputs: [returnId, approve, agentId]
+    outputs: [Approved/Rejected]
+    entities: [Returns]
+    workflows: [WF-C]
+    target_web_feature: Returns review queue
+    target_module: MOD-RETURNS
+    functional_parity: Only 'Requested' reviewable; records agent/time. Mid-stage of returns lifecycle.
+    evidence: {tier: verified, ref: "OD-CAP-013; OD-RULE-018"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-014
+    source_app: OrderDesk
+    name: Manage assigned sales-agent tasks
+    purpose: List active tasks + change status.
+    actors: [Sales agent]
+    rules: [OD-RULE-019]
+    inputs: [agentId, taskId, status]
+    outputs: [task list / updated status]
+    entities: [SalesAgentTasks, SalesAgents]
+    workflows: []
+    target_web_feature: Agent tasks board
+    target_module: MOD-SALESOPS
+    functional_parity: Status set {Open,InProgress,Done,Cancelled} preserved.
+    evidence: {tier: verified, ref: "OD-CAP-014; OD-RULE-019"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-015
+    source_app: OrderDesk
+    name: View sales-agent commissions
+    purpose: Display recent commissions (cap 100).
+    actors: [Sales agent/manager]
+    rules: []
+    inputs: [agentId]
+    outputs: [commission list]
+    entities: [SalesCommissions]
+    workflows: []
+    target_web_feature: Commission view
+    target_module: MOD-SALESOPS
+    functional_parity: Read-only; rows written by usp_ConvertQuoteToOrder.
+    evidence: {tier: verified, ref: "OD-CAP-015"}
+    disposition: migrate_as_is
+
+  - id: OD-CAP-016
+    source_app: OrderDesk
+    name: View shipment status for order (read-only)
+    purpose: CS shipment lookup for an order.
+    actors: [CS staff]
+    rules: []
+    inputs: [orderId]
+    outputs: [ShipmentStatusView list]
+    entities: [Shipments]
+    workflows: []
+    target_web_feature: Shipment status on staff order detail
+    target_module: MOD-SHIPMENT
+    functional_parity: Read-only consumer of FulfillmentAPI-owned shipment data (RECON-SHIPMENT).
+    evidence: {tier: verified, ref: "OD-CAP-016"}
+    disposition: migrate_unified
+
+  # ======================= CustomerPortal (18) =======================
+  - id: CP-CAP-001
+    source_app: CustomerPortal
+    name: Customer sign-in (local auth)
+    purpose: PBKDF2 auth, lock check, cookie principal.
+    actors: [Customer]
+    rules: [CP-RULE-001, CP-RULE-002]
+    inputs: [username, password]
+    outputs: [authenticated cookie]
+    entities: [CustomerAccounts, Customers]
+    workflows: []
+    target_web_feature: Customer login
+    target_module: MOD-IDENTITY
+    functional_parity: "PBKDF2 (LegacyRetail.Common.PasswordHasher) + lock check preserved. NOTE - Stage 3 flagged Stage 2 under-surfaced auth as a capability; target MUST keep it first-class."
+    evidence: {tier: verified, ref: "CP-CAP-001; CP-RULE-001/002"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-002
+    source_app: CustomerPortal
+    name: Sign out
+    purpose: Clear auth cookie.
+    actors: [Customer]
+    rules: []
+    inputs: []
+    outputs: [cleared session]
+    entities: []
+    workflows: []
+    target_web_feature: Customer logout
+    target_module: MOD-IDENTITY
+    functional_parity: Preserved.
+    evidence: {tier: verified, ref: "CP-CAP-002"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-003
+    source_app: CustomerPortal
+    name: View/update own profile (self-service subset)
+    purpose: Edit ONLY phone + shipping; never name/email/status.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-003]
+    inputs: [phone, shipping fields]
+    outputs: [updated ShopperProfile]
+    entities: [Customers]
+    workflows: []
+    target_web_feature: Customer profile self-service
+    target_module: MOD-CUSTOMER
+    functional_parity: Restricted field set preserved; distinct from staff full-edit OD-CAP-002 (RECON-CUSTOMER — keep policy split).
+    evidence: {tier: verified, ref: "CP-CAP-003; CP-RULE-003"}
+    disposition: migrate_with_context_policy
+
+  - id: CP-CAP-004
+    source_app: CustomerPortal
+    name: Browse/search products (anonymous allowed)
+    purpose: Public catalog browse, non-discontinued, cap 200.
+    actors: [Anyone]
+    rules: [CP-RULE-004]
+    inputs: [term, categoryId]
+    outputs: [products + availability + categories]
+    entities: [Products, ProductCategories, Inventory]
+    workflows: [WF-B]
+    target_web_feature: Public catalog
+    target_module: MOD-CATALOG
+    functional_parity: Anonymous access preserved; shares read service with OD-CAP-003 (RECON-CATALOG).
+    evidence: {tier: verified, ref: "CP-CAP-004; CP-RULE-004"}
+    disposition: migrate_unified
+
+  - id: CP-CAP-005
+    source_app: CustomerPortal
+    name: Product detail + displayed availability
+    purpose: Show product + informational availability (re-checked at checkout).
+    actors: [Anyone]
+    rules: [CP-RULE-005]
+    inputs: [productId]
+    outputs: [product + available qty]
+    entities: [Products, Inventory]
+    workflows: [WF-B]
+    target_web_feature: Product detail page
+    target_module: MOD-CATALOG
+    functional_parity: Display-only availability; authoritative recheck stays at checkout (CP-RULE-011).
+    evidence: {tier: verified, ref: "CP-CAP-005; CP-RULE-005"}
+    disposition: migrate_unified
+
+  - id: CP-CAP-006
+    source_app: CustomerPortal
+    name: Manage shopping cart
+    purpose: Add/update/remove; merge on add; qty<=0 removes.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-006, CP-RULE-007]
+    inputs: [productId, quantity]
+    outputs: [updated cart]
+    entities: [ShoppingCarts, ShoppingCartItems, Products]
+    workflows: [WF-B]
+    target_web_feature: Cart
+    target_module: MOD-SHOPPING
+    functional_parity: Cart semantics preserved; unique to CustomerPortal.
+    evidence: {tier: verified, ref: "CP-CAP-006"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-007
+    source_app: CustomerPortal
+    name: Apply promotional coupon
+    purpose: Validate eligibility; store code on cart (discount at checkout).
+    actors: [Authenticated customer]
+    rules: [CP-RULE-008]
+    inputs: [coupon code]
+    outputs: [code stored / rejection reason]
+    entities: [ShoppingCarts, Coupons, CouponRedemptions]
+    workflows: [WF-B]
+    target_web_feature: Coupon apply
+    target_module: MOD-SHOPPING
+    functional_parity: Five-part eligibility rule preserved; unique to CustomerPortal.
+    evidence: {tier: verified, ref: "CP-CAP-007; CP-RULE-008"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-008
+    source_app: CustomerPortal
+    name: Remove applied coupon
+    purpose: Clear coupon from cart.
+    actors: [Authenticated customer]
+    rules: []
+    inputs: []
+    outputs: [cart without coupon]
+    entities: [ShoppingCarts]
+    workflows: []
+    target_web_feature: Coupon remove
+    target_module: MOD-SHOPPING
+    functional_parity: Preserved.
+    evidence: {tier: verified, ref: "CP-CAP-008"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-009
+    source_app: CustomerPortal
+    name: Place order from cart (idempotent checkout)
+    purpose: Cart->Confirmed order; idempotency key; recheck inventory; coupon redemption.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-009, CP-RULE-010, CP-RULE-011, CP-RULE-012, CP-RULE-013]
+    inputs: [idempotencyKey]
+    outputs: [new OrderId / failure]
+    entities: [Orders, OrderLines, ShoppingCarts, CouponRedemptions, Inventory]
+    workflows: [WF-B]
+    target_web_feature: Checkout
+    target_module: MOD-ORDER
+    functional_parity: OrderSource='CustomerPortal'; idempotency (UQ_Orders_Idempotency) + recheck + mandatory-info guard preserved (RECON-MANDATORY, RECON-ORDER-CREATE).
+    evidence: {tier: verified, ref: "CP-CAP-009"}
+    disposition: migrate_with_context_policy
+
+  - id: CP-CAP-010
+    source_app: CustomerPortal
+    name: View own order history/detail
+    purpose: Own orders only (ownership-filtered) + CanCancel/CanReturn flags + tracking.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-014]
+    inputs: [orderId]
+    outputs: [own orders/detail]
+    entities: [Orders, OrderLines]
+    workflows: []
+    target_web_feature: Customer order history
+    target_module: MOD-ORDER
+    functional_parity: Ownership filter MUST be preserved (contrast OD-CAP-011 staff-unrestricted). RECON-ORDER-VIEW.
+    evidence: {tier: verified, ref: "CP-CAP-010; CP-RULE-014"}
+    disposition: migrate_with_context_policy
+
+  - id: CP-CAP-011
+    source_app: CustomerPortal
+    name: Request cancellation of own order
+    purpose: Self-cancel Pending/Confirmed only; ownership; no re-cancel.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-015, CP-RULE-014, CP-RULE-016]
+    inputs: [orderId, reason]
+    outputs: [Cancelled / rejection]
+    entities: [Orders]
+    workflows: [WF-D]
+    target_web_feature: Customer cancel action
+    target_module: MOD-ORDER
+    functional_parity: Stricter C# rule (Pending/Confirmed only) preserved; bounded divergence vs staff is INTENTIONAL (RECON-CANCEL).
+    evidence: {tier: verified, ref: "CP-CAP-011; CP-RULE-015"}
+    disposition: migrate_with_context_policy
+
+  - id: CP-CAP-012
+    source_app: CustomerPortal
+    name: Create return request
+    purpose: Request return for Delivered order within 30d; copy lines; block 2nd active.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-017, CP-RULE-018, CP-RULE-014]
+    inputs: [orderId, reason]
+    outputs: [new return (Requested) / rejection]
+    entities: [Returns, ReturnLines, Orders]
+    workflows: [WF-C]
+    target_web_feature: Request return
+    target_module: MOD-RETURNS
+    functional_parity: 30-day/Delivered window + one-active-return preserved; first stage of returns lifecycle.
+    evidence: {tier: verified, ref: "CP-CAP-012; CP-RULE-017/018"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-013
+    source_app: CustomerPortal
+    name: View own return requests
+    purpose: List own returns.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-014]
+    inputs: []
+    outputs: [own returns]
+    entities: [Returns]
+    workflows: []
+    target_web_feature: Returns list (customer)
+    target_module: MOD-RETURNS
+    functional_parity: Ownership-filtered read preserved.
+    evidence: {tier: verified, ref: "CP-CAP-013"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-014
+    source_app: CustomerPortal
+    name: View shipment tracking (friendly, read-only)
+    purpose: Friendly shipment/event view for own order; ownership checked.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-014]
+    inputs: [orderId]
+    outputs: [friendly tracking]
+    entities: [Shipments, CarrierEvents, Orders]
+    workflows: [WF-B]
+    target_web_feature: Customer tracking view
+    target_module: MOD-SHIPMENT
+    functional_parity: FriendlyStatus mapping + ownership preserved; read-only consumer (RECON-SHIPMENT).
+    evidence: {tier: verified, ref: "CP-CAP-014"}
+    disposition: migrate_unified
+
+  - id: CP-CAP-015
+    source_app: CustomerPortal
+    name: Create & view support tickets
+    purpose: Open ticket (subject req) + initial message; view own.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-019, CP-RULE-014]
+    inputs: [subject, body, relatedOrderId]
+    outputs: [new ticket Open]
+    entities: [SupportTickets, SupportTicketMessages]
+    workflows: []
+    target_web_feature: Support ticket create/list
+    target_module: MOD-SUPPORT
+    functional_parity: Preserved; unique to CustomerPortal.
+    evidence: {tier: verified, ref: "CP-CAP-015"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-016
+    source_app: CustomerPortal
+    name: Reply to support ticket
+    purpose: Add message to own non-Closed ticket.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-020, CP-RULE-014]
+    inputs: [ticketId, body]
+    outputs: [message appended]
+    entities: [SupportTickets, SupportTicketMessages]
+    workflows: []
+    target_web_feature: Ticket reply
+    target_module: MOD-SUPPORT
+    functional_parity: No-reply-on-Closed preserved.
+    evidence: {tier: verified, ref: "CP-CAP-016; CP-RULE-020"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-017
+    source_app: CustomerPortal
+    name: Change support ticket status
+    purpose: Transition via validated graph.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-021, CP-RULE-014]
+    inputs: [ticketId, newStatus]
+    outputs: [updated status / rejection]
+    entities: [SupportTickets]
+    workflows: []
+    target_web_feature: Ticket status change
+    target_module: MOD-SUPPORT
+    functional_parity: Transition graph preserved (CK_SupportTickets_Status).
+    evidence: {tier: verified, ref: "CP-CAP-017; CP-RULE-021"}
+    disposition: migrate_as_is
+
+  - id: CP-CAP-018
+    source_app: CustomerPortal
+    name: Maintain wishlist
+    purpose: View/add/remove wishlist; dedupe add.
+    actors: [Authenticated customer]
+    rules: [CP-RULE-022]
+    inputs: [productId]
+    outputs: [updated wishlist]
+    entities: [Wishlists, WishlistItems, Products]
+    workflows: []
+    target_web_feature: Wishlist
+    target_module: MOD-SHOPPING
+    functional_parity: Dedupe preserved; unique to CustomerPortal.
+    evidence: {tier: verified, ref: "CP-CAP-018; CP-RULE-022"}
+    disposition: migrate_as_is
+
+  # ======================= FulfillmentAPI (13) =======================
+  - id: FA-CAP-001
+    source_app: FulfillmentAPI
+    name: Retrieve pending/specific fulfillment orders
+    purpose: Work queue (Confirmed/Allocated) + single order; read-only.
+    actors: [Warehouse system (API client)]
+    rules: [FA-RULE-010]
+    inputs: [none / orderId]
+    outputs: [orders + lines]
+    entities: [Orders, OrderLines]
+    workflows: [WF-A, WF-B]
+    target_web_feature: API GET /orders/pending, /orders/{id} (compat) + warehouse work-queue screen
+    target_module: MOD-FULFILLMENT
+    functional_parity: Confirmed/Allocated filter + cap 200 preserved; API contract preserved (API-COMPAT).
+    evidence: {tier: verified, ref: "FA-CAP-001; FulfillmentAPI OrdersController"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-002
+    source_app: FulfillmentAPI
+    name: Check product availability (API)
+    purpose: OnHand/Allocated/Available for a product.
+    actors: [Warehouse system]
+    rules: [FA-RULE-001]
+    inputs: [productId]
+    outputs: [stock figures]
+    entities: [Inventory]
+    workflows: []
+    target_web_feature: API GET /inventory/availability/{productId}
+    target_module: MOD-FULFILLMENT
+    functional_parity: Response shape {ProductId,QuantityOnHand,QuantityAllocated,Available} preserved (API-COMPAT); availability expression shared (DUP-AVAIL).
+    evidence: {tier: verified, ref: "FA-CAP-002; InventoryController"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-003
+    source_app: FulfillmentAPI
+    name: Allocate (reserve) inventory
+    purpose: usp_AllocateInventory; reserve stock; roll order to Allocated; block cancelled/over-alloc.
+    actors: [Warehouse system]
+    rules: [FA-RULE-002, FA-RULE-003, FA-RULE-004, FA-RULE-012]
+    inputs: [orderId, warehouseId]
+    outputs: [allocation result]
+    entities: [Inventory, InventoryAllocations, Orders]
+    workflows: [WF-A, WF-B, WF-D]
+    target_web_feature: API POST /inventory/allocate + warehouse UI action
+    target_module: MOD-FULFILLMENT
+    functional_parity: SQL proc retained; THROW 50021/50022 -> 409 preserved; the ONLY inventory writer (RECON-INVENTORY).
+    evidence: {tier: verified, ref: "FA-CAP-003; usp_AllocateInventory"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-004
+    source_app: FulfillmentAPI
+    name: Create pick list (bin assignment)
+    purpose: Pick list for allocated order; round-robin bins; one per order.
+    actors: [Warehouse operator]
+    rules: [FA-RULE-005, FA-RULE-006, FA-RULE-007]
+    inputs: [orderId]
+    outputs: [pick list]
+    entities: [PickLists, PickListItems, InventoryAllocations, WarehouseBins]
+    workflows: [WF-E]
+    target_web_feature: API POST /picking/picklists + warehouse pick UI
+    target_module: MOD-FULFILLMENT
+    functional_parity: Requires allocation; blocked for cancelled; one-per-order preserved.
+    evidence: {tier: verified, ref: "FA-CAP-004"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-005
+    source_app: FulfillmentAPI
+    name: Mark pick-list item picked
+    purpose: Record picked qty; roll order Allocated->Picking.
+    actors: [Warehouse operator]
+    rules: [FA-RULE-008, FA-RULE-013]
+    inputs: [pickListItemId, quantityPicked]
+    outputs: [updated item/list/order]
+    entities: [PickListItems, PickLists, Orders]
+    workflows: [WF-E]
+    target_web_feature: API POST /picking/items/{id}/pick + UI
+    target_module: MOD-FULFILLMENT
+    functional_parity: Qty bounds 0..toPick; status rollup preserved. GAP noted in Stage 1 FA (GAP-002 on Picking roll) — carry forward, verify.
+    evidence: {tier: verified, ref: "FA-CAP-005; FA-RULE-013 (analysis-gaps GAP-002)"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-006
+    source_app: FulfillmentAPI
+    name: Create shipment package
+    purpose: Package order (all items picked) -> Packed; unique package code.
+    actors: [Warehouse operator]
+    rules: [FA-RULE-009, FA-RULE-011, FA-RULE-014]
+    inputs: [orderId, package]
+    outputs: [shipment Packed]
+    entities: [Shipments, ShipmentPackages, Orders]
+    workflows: [WF-E]
+    target_web_feature: API POST /shipments + UI
+    target_module: MOD-SHIPMENT
+    functional_parity: All-picked precondition + unique code preserved.
+    evidence: {tier: verified, ref: "FA-CAP-006"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-007
+    source_app: FulfillmentAPI
+    name: Update shipment status (incl dispatch)
+    purpose: Validated transition graph; dispatch requires package+carrier; roll order Shipped/Delivered.
+    actors: [Warehouse operator / carrier integration]
+    rules: [FA-RULE-015, FA-RULE-016, FA-RULE-017]
+    inputs: [shipmentId, status, carrier, tracking]
+    outputs: [updated shipment/order]
+    entities: [Shipments, Orders]
+    workflows: [WF-E]
+    target_web_feature: API PUT /shipments/{id}/status + UI
+    target_module: MOD-SHIPMENT
+    functional_parity: Transition graph + CanDispatch guard + order roll-forward preserved.
+    evidence: {tier: verified, ref: "FA-CAP-007; FA-RULE-015/016"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-008
+    source_app: FulfillmentAPI
+    name: Record carrier event (idempotent)
+    purpose: Append event; dedupe on (ShipmentId,EventCode,EventUtc).
+    actors: [Carrier integration]
+    rules: [FA-RULE-018]
+    inputs: [shipmentId, code, desc, time]
+    outputs: [event (existing or new)]
+    entities: [CarrierEvents, Shipments]
+    workflows: []
+    target_web_feature: API POST /shipments/{id}/events
+    target_module: MOD-SHIPMENT
+    functional_parity: Idempotency (UQ_CarrierEvents) preserved; owner/writer of CarrierEvents.
+    evidence: {tier: verified, ref: "FA-CAP-008; FA-RULE-018"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-009
+    source_app: FulfillmentAPI
+    name: Retrieve shipment tracking
+    purpose: Packages + carrier events; shipments by order.
+    actors: [Warehouse system / downstream]
+    rules: []
+    inputs: [shipmentId / orderId]
+    outputs: [tracking data]
+    entities: [Shipments, ShipmentPackages, CarrierEvents]
+    workflows: []
+    target_web_feature: API GET /shipments/{id}/tracking, /shipments/by-order/{orderId}
+    target_module: MOD-SHIPMENT
+    functional_parity: Response shape preserved (API-COMPAT); source for CP/OD read views.
+    evidence: {tier: verified, ref: "FA-CAP-009"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-010
+    source_app: FulfillmentAPI
+    name: Receive returned merchandise & adjust inventory
+    purpose: usp_ReceiveReturnAndAdjust; Approved-only; restock; idempotent; no refund.
+    actors: [Warehouse operator]
+    rules: [FA-RULE-019, FA-RULE-020, FA-RULE-021]
+    inputs: [returnId, warehouseId]
+    outputs: [receipt / 409]
+    entities: [Returns, ReturnReceipts, Inventory, WarehouseAdjustments]
+    workflows: [WF-C]
+    target_web_feature: API POST /returns/receive + warehouse UI
+    target_module: MOD-RETURNS
+    functional_parity: Approved-only (THROW 50031->409) + idempotent + no-refund preserved; final returns stage.
+    evidence: {tier: verified, ref: "FA-CAP-010; usp_ReceiveReturnAndAdjust"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-011
+    source_app: FulfillmentAPI
+    name: List adjustments for a return receipt
+    purpose: WarehouseAdjustments for a receipt.
+    actors: [Warehouse system]
+    rules: []
+    inputs: [returnReceiptId]
+    outputs: [adjustments]
+    entities: [WarehouseAdjustments]
+    workflows: []
+    target_web_feature: API GET /returns/receipts/{id}/adjustments
+    target_module: MOD-RETURNS
+    functional_parity: Preserved (API-COMPAT).
+    evidence: {tier: verified, ref: "FA-CAP-011"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-012
+    source_app: FulfillmentAPI
+    name: List active warehouses
+    purpose: Active warehouse reference data.
+    actors: [Warehouse system/operator]
+    rules: []
+    inputs: []
+    outputs: [warehouses]
+    entities: [Warehouses]
+    workflows: []
+    target_web_feature: API GET /warehouses + reference UI
+    target_module: MOD-FULFILLMENT
+    functional_parity: IsActive filter preserved.
+    evidence: {tier: verified, ref: "FA-CAP-012"}
+    disposition: migrate_api_compat
+
+  - id: FA-CAP-013
+    source_app: FulfillmentAPI
+    name: Warehouse activity summary (cross-domain report)
+    purpose: usp_WarehouseActivitySummary; staff vs web, distinct customers/agents.
+    actors: [Operations/reporting]
+    rules: [FA-RULE-022]
+    inputs: [warehouseId?]
+    outputs: [activity rows]
+    entities: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+    workflows: []
+    target_web_feature: API GET /warehouses/activity-summary + reporting screen
+    target_module: MOD-REPORTING
+    functional_parity: Cross-domain SQL join preserved; DEP-REPORT-JOIN (reads OrderDesk-owned SalesAgents). After consolidation this is intra-app, simplifying ownership.
+    evidence: {tier: verified, ref: "FA-CAP-013; usp_WarehouseActivitySummary"}
+    disposition: migrate_api_compat
+
+# ======================= Cross-cutting rules not tied to a single capability =======================
+cross_cutting:
+  - id: FA-RULE-023
+    name: API key auth (X-Api-Key)
+    disposition: migrate_api_compat
+    target_module: MOD-PLATFORM
+    note: Preserve X-Api-Key for existing API routes via a compatibility adapter; see api-compatibility-inventory. Flagged "dev, not production" in source -> security hardening is a BUSINESS/SECURITY DECISION.
+    evidence: {tier: verified, ref: "ApiKeyMiddleware"}
+  - id: FA-RULE-024
+    name: Centralized error mapping (RFC7807 + {error})
+    disposition: migrate_as_is
+    target_module: MOD-PLATFORM
+    note: Preserve 404/409/400 {error} shape on existing API routes + problem+json on 500.
+    evidence: {tier: verified, ref: "FulfillmentControllerBase, ExceptionHandlingMiddleware"}
+  - id: CP-RULE-023
+    name: CSRF/antiforgery + cookie auth (web)
+    disposition: migrate_as_is
+    target_module: MOD-PLATFORM
+    note: Preserve antiforgery on state-changing web POSTs + cookie auth for the web UI.
+    evidence: {tier: verified, ref: "CP-RULE-023"}
+  - id: CP-RULE-014
+    name: Record-ownership authorization
+    disposition: migrate_as_is
+    target_module: MOD-PLATFORM
+    note: Preserve per-customer ownership filtering across orders/returns/tickets/wishlist/profile/tracking.
+    evidence: {tier: verified, ref: "CP-RULE-014"}
+
+summary:
+  total_capabilities: 47
+  by_app: {OrderDesk: 16, CustomerPortal: 18, FulfillmentAPI: 13}
+  dispositions:
+    migrate_as_is: 24
+    migrate_unified: 6
+    migrate_with_context_policy: 8
+    migrate_api_compat: 13
+    business_decision_required: 0
+  discarded: 0
+  note: >
+    Every capability has a disposition and a target module. 0 discarded. 'migrate_with_context_policy'
+    marks capabilities whose per-actor behavior differences are intentional and must be preserved as
+    policy, not collapsed (customer full-vs-subset edit, staff-vs-customer order scope and cancel rules).

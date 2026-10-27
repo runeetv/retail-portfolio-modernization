@@ -1,0 +1,34 @@
+<Solution>
+  <Folder Name="/database/" />
+  <Folder Name="/database/provisioning/">
+    <Project Path="database/provisioning/DbProvisioner/DbProvisioner.csproj" />
+  </Folder>
+  <Folder Name="/src/" />
+  <Folder Name="/src/CustomerPortal/">
+    <Project Path="src/CustomerPortal/CustomerPortal.Application/CustomerPortal.Application.csproj" />
+    <Project Path="src/CustomerPortal/CustomerPortal.Domain/CustomerPortal.Domain.csproj" />
+    <Project Path="src/CustomerPortal/CustomerPortal.Infrastructure/CustomerPortal.Infrastructure.csproj" />
+    <Project Path="src/CustomerPortal/CustomerPortal.Web/CustomerPortal.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/FulfillmentAPI/">
+    <Project Path="src/FulfillmentAPI/FulfillmentAPI.Api/FulfillmentAPI.Api.csproj" />
+    <Project Path="src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentAPI.Application.csproj" />
+    <Project Path="src/FulfillmentAPI/FulfillmentAPI.Domain/FulfillmentAPI.Domain.csproj" />
+    <Project Path="src/FulfillmentAPI/FulfillmentAPI.Infrastructure/FulfillmentAPI.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/OrderDesk/">
+    <Project Path="src/OrderDesk/OrderDesk.Application/OrderDesk.Application.csproj" />
+    <Project Path="src/OrderDesk/OrderDesk.Desktop/OrderDesk.Desktop.csproj" />
+    <Project Path="src/OrderDesk/OrderDesk.Domain/OrderDesk.Domain.csproj" />
+    <Project Path="src/OrderDesk/OrderDesk.Infrastructure/OrderDesk.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/Shared/">
+    <Project Path="src/Shared/LegacyRetail.Common/LegacyRetail.Common.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CustomerPortal.Tests/CustomerPortal.Tests.csproj" />
+    <Project Path="tests/FulfillmentAPI.Tests/FulfillmentAPI.Tests.csproj" />
+    <Project Path="tests/IntegrationTests/IntegrationTests.csproj" />
+    <Project Path="tests/OrderDesk.Tests/OrderDesk.Tests.csproj" />
+  </Folder>
+</Solution>

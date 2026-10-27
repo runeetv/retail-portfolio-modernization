@@ -1,0 +1,186 @@
+# Cross-App Workflows — LegacyRetailPortfolio (Stage 2 consolidation)
+# Workflows that span more than one application. Apps never call each other directly;
+# every handoff is mediated by shared rows in the shared database (status columns on
+# dbo.Orders, dbo.Shipments, dbo.Returns, dbo.CarrierEvents). "behavior_verified" means
+# an integration test exercised the end-to-end chain and passed.
+#
+# Verification legend:
+#   behavior_verified   - end-to-end chain asserted by a passing integration test
+#   source_verified     - each step confirmed in source/SQL; full chain not in one single test
+#   inferred            - reconstructed from source but not directly asserted end-to-end
+
+meta:
+  app_keys:
+    APP-ORDERDESK: OrderDesk (WPF desktop, staff)
+    APP-PORTAL: CustomerPortal (ASP.NET Core MVC, shopper self-service)
+    APP-FULFILL: FulfillmentAPI (ASP.NET Core Web API, warehouse)
+  integration_style: >
+    data_mediated_only. No direct code or HTTP calls between applications. The only shared
+    code is LegacyRetail.Common (DbConnectionConfig + PasswordHasher), which is infrastructure,
+    not business logic. All coordination is through shared database rows and their status columns.
+  test_suite: tests/IntegrationTests/CrossAppWorkflowTests.cs
+  test_run:
+    command: 'dotnet test tests\IntegrationTests\IntegrationTests.csproj --filter "FullyQualifiedName~CrossAppWorkflowTests"'
+    result: "Passed 4/4"
+    database: "(localdb)\\MSSQLLocalDB / LegacyRetailDB (provisioned)"
+
+workflows:
+  - id: XWF-A
+    name: Staff quote to order to warehouse fulfillment
+    summary: >
+      A sales agent builds a quote in OrderDesk and converts it to a confirmed order. The order
+      becomes a shared dbo.Orders row (OrderSource 'OrderDesk', Status 'Confirmed'). FulfillmentAPI
+      independently picks up confirmed orders as its work queue and advances them through allocation,
+      picking, packing and shipping. Handoff is the shared Orders row + its Status column.
+    participants: [APP-ORDERDESK, APP-FULFILL]
+    trigger: Staff converts an accepted quote to an order (OrderDesk)
+    steps:
+      - step: 1
+        app: APP-ORDERDESK
+        action: Convert quote to order; write dbo.Orders (Status 'Confirmed') + SalesCommission in one tx
+        evidence:
+          source:
+            - database/procedures/procedures.sql#usp_ConvertQuoteToOrder
+            - src/OrderDesk/OrderDesk.Application/OrderService.cs#CreateStaffOrderAsync
+          stage1: [OD-CAP-010, OD-WF-002]
+      - step: 2
+        app: APP-FULFILL
+        action: Read Confirmed orders as work queue; allocate inventory (Status -> 'Allocated')
+        evidence:
+          source:
+            - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs#GetPendingOrdersAsync
+            - database/procedures/procedures.sql#usp_AllocateInventory
+          stage1: [FA-CAP-001, FA-CAP-003, FA-WF-001]
+      - step: 3
+        app: APP-FULFILL
+        action: Advance Picking -> Packed -> Shipped -> Delivered; create dbo.Shipments + dbo.CarrierEvents
+        evidence:
+          source:
+            - src/FulfillmentAPI/FulfillmentAPI.Application/PickingService.cs
+            - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs
+          stage1: [FA-CAP-004, FA-CAP-005, FA-CAP-006, FA-WF-002]
+    shared_entities: [CE-ORDER, CE-ORDER-LINE, CE-SHIPMENT, CE-CARRIER-EVENT]
+    dependency_ref: DEP-ORDER-HANDOFF
+    verification: behavior_verified
+    tests:
+      - "tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowA_staff_quote_to_order_then_warehouse_fulfillment (passed)"
+    stage1: [OD-WF-002, FA-WF-001, FA-WF-002]
+
+  - id: XWF-B
+    name: Customer checkout to fulfillment to tracking
+    summary: >
+      A shopper checks out a cart in CustomerPortal, producing a shared dbo.Orders row
+      (OrderSource 'CustomerPortal', Status 'Confirmed') guarded by an idempotency key.
+      FulfillmentAPI fulfills it exactly as in XWF-A. The shopper then tracks the shipment:
+      CustomerPortal reads FulfillmentAPI-owned dbo.Shipments / dbo.CarrierEvents (read-only)
+      and renders a friendly status; OrderDesk CS can read the same rows.
+    participants: [APP-PORTAL, APP-FULFILL]
+    reads_back: [APP-PORTAL, APP-ORDERDESK]
+    trigger: Shopper confirms checkout (CustomerPortal)
+    steps:
+      - step: 1
+        app: APP-PORTAL
+        action: Checkout cart; write dbo.Orders (Status 'Confirmed') with IdempotencyKey guard
+        evidence:
+          source:
+            - src/CustomerPortal/CustomerPortal.Application/CheckoutService.cs#CheckoutAsync
+          stage1: [CP-CAP-009, CP-WF-003]
+      - step: 2
+        app: APP-FULFILL
+        action: Allocate + fulfill (same chain as XWF-A steps 2-3)
+        evidence:
+          source:
+            - database/procedures/procedures.sql#usp_AllocateInventory
+            - src/FulfillmentAPI/FulfillmentAPI.Application/ShipmentService.cs
+          stage1: [FA-CAP-003, FA-CAP-005, FA-CAP-006]
+      - step: 3
+        app: APP-PORTAL
+        action: Read dbo.Shipments / dbo.CarrierEvents (read-only) and present FriendlyStatus
+        evidence:
+          source:
+            - src/CustomerPortal/CustomerPortal.Application/TrackingService.cs
+          stage1: [CP-CAP-013, CP-WF-005]
+    shared_entities: [CE-ORDER, CE-SHIPMENT, CE-CARRIER-EVENT]
+    dependency_ref: [DEP-ORDER-HANDOFF, DEP-SHIPMENT-READ]
+    verification: source_verified
+    verification_note: >
+      Every step is confirmed in source/SQL, and the fulfillment middle (step 2) plus the
+      shipment read-back are exercised by passing tests (Cross_app_shipment_visibility and the
+      per-app checkout/fulfillment suites). The full checkout -> fulfill -> track chain is not
+      asserted by a single cross-app test, so this workflow is marked source_verified rather
+      than behavior_verified to avoid overstating evidence.
+    tests:
+      - "tests/IntegrationTests/CrossAppWorkflowTests.cs#Cross_app_shipment_visibility (passed; covers step 3 read-back)"
+    stage1: [CP-WF-003, CP-WF-005, FA-WF-002]
+
+  - id: XWF-C
+    name: Return request to review to receipt
+    summary: >
+      A shopper requests a return in CustomerPortal (dbo.Returns Status 'Requested'). OrderDesk
+      staff review it and set 'Approved' or 'Rejected'. FulfillmentAPI receives an approved return
+      at the warehouse and sets 'Received', adjusting inventory. Each app owns exactly one stage of
+      the lifecycle; handoff is the shared Returns row + its Status column (complementary, not duplicate).
+    participants: [APP-PORTAL, APP-ORDERDESK, APP-FULFILL]
+    trigger: Shopper submits a return request (CustomerPortal)
+    steps:
+      - step: 1
+        app: APP-PORTAL
+        action: Create dbo.Returns (Status 'Requested') within the return window
+        evidence:
+          source:
+            - src/CustomerPortal/CustomerPortal.Application/ReturnService.cs
+          stage1: [CP-CAP-015, CP-WF-006]
+      - step: 2
+        app: APP-ORDERDESK
+        action: Review; set Status 'Approved' or 'Rejected'
+        evidence:
+          source:
+            - src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs
+          stage1: [OD-CAP-013, OD-WF-004]
+      - step: 3
+        app: APP-FULFILL
+        action: Receive approved return; set Status 'Received' + adjust inventory (one tx)
+        evidence:
+          source:
+            - database/procedures/procedures.sql#usp_ReceiveReturnAndAdjust
+          stage1: [FA-CAP-011, FA-WF-004]
+    shared_entities: [CE-RETURN]
+    dependency_ref: DEP-RETURN-LIFECYCLE
+    verification: behavior_verified
+    tests:
+      - "tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowC_return_request_review_receipt (passed)"
+    stage1: [CP-WF-006, OD-WF-004, FA-WF-004]
+
+  - id: XWF-D
+    name: Cancellation blocks fulfillment
+    summary: >
+      When an order is cancelled (by OrderDesk staff or by a CustomerPortal shopper) the shared
+      dbo.Orders Status becomes 'Cancelled'. FulfillmentAPI's allocation proc refuses to allocate a
+      cancelled order (THROW 50021), so the cancel in one app blocks warehouse work in another. The
+      cancellation rule itself diverges between the two producer apps (see RULE-CANCEL in
+      business-rule-comparison.yaml): OrderDesk may cancel from 'Allocated' (with override + audit),
+      CustomerPortal only from Pending/Confirmed.
+    participants: [APP-ORDERDESK, APP-PORTAL, APP-FULFILL]
+    trigger: Staff or shopper cancels an order
+    steps:
+      - step: 1
+        app: [APP-ORDERDESK, APP-PORTAL]
+        action: Set dbo.Orders Status 'Cancelled'
+        evidence:
+          source:
+            - src/OrderDesk/OrderDesk.Application/OrderService.cs#CancelOrderAsync
+            - src/CustomerPortal/CustomerPortal.Application/OrderHistoryService.cs#RequestCancellationAsync
+          stage1: [OD-CAP-011, CP-CAP-011]
+      - step: 2
+        app: APP-FULFILL
+        action: Allocation attempt on a cancelled order raises THROW 50021 (blocked)
+        evidence:
+          source:
+            - database/procedures/procedures.sql#usp_AllocateInventory
+          stage1: [FA-RULE-021]
+    shared_entities: [CE-ORDER]
+    dependency_ref: DEP-ORDER-HANDOFF
+    verification: behavior_verified
+    tests:
+      - "tests/IntegrationTests/CrossAppWorkflowTests.cs#WorkflowD_cancellation_blocks_fulfillment (passed)"
+    stage1: [OD-WF-003, CP-WF-004, FA-WF-001]

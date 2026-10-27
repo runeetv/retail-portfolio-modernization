@@ -1,0 +1,13 @@
+@{
+    ViewData["Title"] = "New quote";
+}
+<h1>New quote</h1>
+<div class="card" style="max-width:460px">
+    <form method="post">
+        @Html.AntiForgeryToken()
+        <p><label>Customer id<br /><input name="customerId" type="number" required /></label></p>
+        <p><label>Sales agent id (blank = your agent id)<br /><input name="salesAgentId" type="number" /></label></p>
+        <p><label>Validity days (default 14)<br /><input name="validityDays" type="number" value="14" /></label></p>
+        <button class="btn" type="submit">Create</button>
+    </form>
+</div>

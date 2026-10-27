@@ -1,0 +1,33 @@
+@model CatalogProduct
+@{
+    ViewData["Title"] = Model.Name;
+    var avail = (int)(ViewData["Available"] ?? 0);
+}
+<h2>@Model.Name</h2>
+<p class="text-muted">@Model.Category?.Name &mdash; SKU @Model.Sku</p>
+<h4>@Model.UnitPrice.ToString("C")</h4>
+<p>
+    @if (avail > 0)
+    {
+        <span class="badge bg-success">@avail in stock</span>
+    }
+    else
+    {
+        <span class="badge bg-secondary">Out of stock</span>
+    }
+</p>
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <form asp-controller="Cart" asp-action="Add" method="post" class="row g-2">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="productId" value="@Model.ProductId" />
+        <div class="col-auto"><input type="number" name="quantity" value="1" min="1" class="form-control" style="width:90px" /></div>
+        <div class="col-auto"><button class="btn btn-primary">Add to cart</button></div>
+    </form>
+    <form asp-controller="Wishlist" asp-action="Add" method="post" class="mt-2">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="productId" value="@Model.ProductId" />
+        <button class="btn btn-outline-secondary btn-sm">Add to wishlist</button>
+    </form>
+}
+<a asp-action="Index" class="btn btn-link mt-3">Back to shop</a>

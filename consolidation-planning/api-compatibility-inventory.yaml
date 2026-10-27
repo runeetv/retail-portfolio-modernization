@@ -1,0 +1,259 @@
+# API Compatibility Inventory — LegacyRetailPortfolio consolidation (planning)
+# The ONLY application with a demonstrated external HTTP contract is FulfillmentAPI.
+# OrderDesk = WPF desktop (no HTTP). CustomerPortal = server-rendered MVC (no documented external API;
+# its controllers return Razor views, not a contract for third parties).
+# compat_strategy: preserve_route | preserve_via_adapter | internalize
+# NOTE: No external consumer is proven in the repo; consumer identity is recorded as a question, not invented.
+version: 1
+
+scope:
+  external_api_surface: FulfillmentAPI only
+  base_route: /api/fulfillment
+  non_api_apps:
+    OrderDesk: "WPF desktop (MVVM); no HTTP endpoints; migrates to staff web pages (no API contract to preserve)."
+    CustomerPortal: "ASP.NET Core MVC returning Razor views + cookie auth + antiforgery; server-rendered, not a third-party API. Routes are internal UI, not external contracts."
+
+auth:
+  mechanism: API key header
+  header: X-Api-Key
+  config_key: ApiKey
+  default_value_in_source: dev-fulfillment-key
+  exempt_paths: ["/swagger", "/", "/health", "/openapi"]
+  failure: 401 application/json {"error":"Missing or invalid API key. Provide the X-Api-Key header."}
+  evidence: src/FulfillmentAPI/FulfillmentAPI.Api/Security/ApiKeyMiddleware.cs
+  source_caveat: "Code comment states this is development auth, 'not production security'."
+  open_question: OPEN-Q-SEC
+
+error_model:
+  success: 200 OK with JSON body (anonymous object or DTO)
+  domain_errors: "FulfillmentControllerBase.FromResult: NotFound->404 {error}, Conflict->409 {error}, Validation->400 {error}"
+  unhandled: "500 RFC7807 application/problem+json via ExceptionHandlingMiddleware"
+  content_type: application/json ([Produces])
+  evidence: [FulfillmentControllerBase.cs, Middleware/ExceptionHandlingMiddleware.cs]
+
+endpoints:
+  - id: API-ORD-PENDING
+    route: GET /api/fulfillment/orders/pending
+    request: "none (query cap 200 Confirmed|Allocated)"
+    response: "200 order list (+lines)"
+    auth: X-Api-Key
+    behavior: FA-CAP-001 pending work queue (FA-RULE-010 filter)
+    status_codes: [200, 401]
+    error_format: "{error} on failure"
+    idempotency: "safe (GET)"
+    depends_on: [Orders, OrderLines]
+    compat_strategy: preserve_route
+    contract_tests: ["GET returns only Confirmed|Allocated; cap 200; 401 without key"]
+  - id: API-ORD-GET
+    route: GET /api/fulfillment/orders/{orderId:int}
+    response: "200 order+lines | 404 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-001 single order
+    status_codes: [200, 404, 401]
+    idempotency: "safe (GET)"
+    depends_on: [Orders, OrderLines]
+    compat_strategy: preserve_route
+    contract_tests: ["known order -> 200 shape; unknown -> 404 {error}"]
+  - id: API-INV-AVAIL
+    route: GET /api/fulfillment/inventory/availability/{productId:int}
+    response: '200 {ProductId, QuantityOnHand, QuantityAllocated, Available} | 404 {error}'
+    auth: X-Api-Key
+    behavior: FA-CAP-002 availability (FA-RULE-001 Available = OnHand - Allocated)
+    status_codes: [200, 404, 401]
+    idempotency: "safe (GET)"
+    depends_on: [Inventory]
+    compat_strategy: preserve_route
+    contract_tests: ["response has exactly those 4 fields; Available = OnHand - Allocated; no inventory row -> 404"]
+  - id: API-INV-ALLOCATE
+    route: POST /api/fulfillment/inventory/allocate
+    request: "AllocateRequest { OrderId:int, WarehouseId:int }"
+    response: "200 allocation result | 404 {error} | 409 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-003 allocation via usp_AllocateInventory
+    status_codes: [200, 404, 409, 401]
+    error_format: "409 {error} for cancelled (50021) / over-allocation (50022)"
+    idempotency: "idempotent for already-allocated products (proc skips)"
+    depends_on: [usp_AllocateInventory, Orders, Inventory, InventoryAllocations, Warehouses]
+    compat_strategy: preserve_route
+    contract_tests: ["allocate success rolls order to Allocated; cancelled order -> 409; over-allocate -> 409; repeat allocate idempotent"]
+  - id: API-INV-ALLOCATIONS
+    route: GET /api/fulfillment/inventory/allocations/{orderId:int}
+    response: "200 allocation list"
+    auth: X-Api-Key
+    behavior: FA-CAP-003 list allocations
+    status_codes: [200, 401]
+    idempotency: "safe (GET)"
+    depends_on: [InventoryAllocations]
+    compat_strategy: preserve_route
+    contract_tests: ["returns allocations for order"]
+  - id: API-PICK-CREATE
+    route: POST /api/fulfillment/picking/picklists
+    request: "create pick list for an order"
+    response: "200 pick list | 409 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-004 (FA-RULE-005 requires allocation; 006 blocks cancelled; 007 one-per-order)
+    status_codes: [200, 409, 401]
+    idempotency: "non-idempotent; second create -> 409"
+    depends_on: [PickLists, PickListItems, InventoryAllocations, WarehouseBins]
+    compat_strategy: preserve_route
+    contract_tests: ["no allocation -> 409; cancelled -> 409; duplicate -> 409; success creates items"]
+  - id: API-PICK-GET
+    route: GET /api/fulfillment/picking/picklists/{pickListId:int}
+    response: "200 | 404 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-004 get pick list
+    status_codes: [200, 404, 401]
+    idempotency: "safe (GET)"
+    depends_on: [PickLists, PickListItems]
+    compat_strategy: preserve_route
+    contract_tests: ["unknown id -> 404"]
+  - id: API-PICK-ITEM
+    route: POST /api/fulfillment/picking/items/{pickListItemId:int}/pick
+    request: "quantityPicked"
+    response: "200 | 400 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-005 (FA-RULE-008 bounds 0..toPick; roll order Allocated->Picking)
+    status_codes: [200, 400, 401]
+    idempotency: "re-posting same qty converges (sets absolute QuantityPicked)"
+    depends_on: [PickListItems, PickLists, Orders]
+    compat_strategy: preserve_route
+    contract_tests: ["qty out of range -> 400; qty>=toPick sets IsPicked; order moves to Picking"]
+  - id: API-SHIP-CREATE
+    route: POST /api/fulfillment/shipments
+    request: "order + package"
+    response: "200 shipment Packed | 409 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-006 (FA-RULE-009 all picked; 011 unique package code; 014 -> Packed)
+    status_codes: [200, 409, 401]
+    idempotency: "non-idempotent; duplicate package code -> 409"
+    depends_on: [Shipments, ShipmentPackages, Orders, PickLists]
+    compat_strategy: preserve_route
+    contract_tests: ["package before all picked -> 409; duplicate code -> 409; success -> order Packed"]
+  - id: API-SHIP-STATUS
+    route: PUT /api/fulfillment/shipments/{shipmentId:int}/status
+    request: "newStatus, carrier?, trackingNumber?"
+    response: "200 | 409 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-007 (FA-RULE-015 transition graph; 016 dispatch needs package+carrier+tracking; 017 roll order)
+    status_codes: [200, 409, 401]
+    idempotency: "transition-guarded; invalid transition -> 409"
+    depends_on: [Shipments, Orders]
+    compat_strategy: preserve_route
+    contract_tests: ["invalid transition -> 409; dispatch w/o carrier -> 409; dispatch -> order Shipped; delivered -> order Delivered"]
+  - id: API-SHIP-EVENT
+    route: POST /api/fulfillment/shipments/{shipmentId:int}/events
+    request: "eventCode, description, eventUtc"
+    response: "200 event | 404 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-008 (FA-RULE-018 idempotent on ShipmentId,EventCode,EventUtc)
+    status_codes: [200, 404, 401]
+    idempotency: "idempotent (returns existing event on repeat; UQ_CarrierEvents)"
+    depends_on: [CarrierEvents, Shipments]
+    compat_strategy: preserve_route
+    contract_tests: ["repeat same event -> same row, no duplicate; unknown shipment -> 404"]
+  - id: API-SHIP-TRACKING
+    route: GET /api/fulfillment/shipments/{shipmentId:int}/tracking
+    response: "200 packages+events | 404 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-009 tracking
+    status_codes: [200, 404, 401]
+    idempotency: "safe (GET)"
+    depends_on: [Shipments, ShipmentPackages, CarrierEvents]
+    compat_strategy: preserve_route
+    contract_tests: ["shape = packages + events"]
+  - id: API-SHIP-BYORDER
+    route: GET /api/fulfillment/shipments/by-order/{orderId:int}
+    response: "200 shipment list"
+    auth: X-Api-Key
+    behavior: FA-CAP-009 shipments for order
+    status_codes: [200, 401]
+    idempotency: "safe (GET)"
+    depends_on: [Shipments]
+    compat_strategy: preserve_route
+    contract_tests: ["returns all shipments for order"]
+  - id: API-RET-RECEIVE
+    route: POST /api/fulfillment/returns/receive
+    request: "returnId, warehouseId"
+    response: "200 receipt | 409 {error} | 404 {error}"
+    auth: X-Api-Key
+    behavior: FA-CAP-010 (usp_ReceiveReturnAndAdjust; FA-RULE-019 approved-only 50031; 020 restock no-refund; 021 idempotent)
+    status_codes: [200, 404, 409, 401]
+    idempotency: "idempotent (one receipt per return; repeat returns existing; UQ_ReturnReceipts_Return)"
+    depends_on: [usp_ReceiveReturnAndAdjust, Returns, ReturnReceipts, Inventory, WarehouseAdjustments]
+    compat_strategy: preserve_route
+    contract_tests: ["non-approved -> 409; receipt restocks OnHand; repeat -> no double restock; return -> Received"]
+  - id: API-RET-ADJ
+    route: GET /api/fulfillment/returns/receipts/{returnReceiptId:int}/adjustments
+    response: "200 adjustments"
+    auth: X-Api-Key
+    behavior: FA-CAP-011 adjustments for receipt
+    status_codes: [200, 401]
+    idempotency: "safe (GET)"
+    depends_on: [WarehouseAdjustments]
+    compat_strategy: preserve_route
+    contract_tests: ["returns adjustments for receipt"]
+  - id: API-WH-LIST
+    route: GET /api/fulfillment/warehouses
+    response: "200 active warehouses"
+    auth: X-Api-Key
+    behavior: FA-CAP-012 (IsActive filter)
+    status_codes: [200, 401]
+    idempotency: "safe (GET)"
+    depends_on: [Warehouses]
+    compat_strategy: preserve_route
+    contract_tests: ["only active warehouses"]
+  - id: API-WH-ACTIVITY
+    route: GET /api/fulfillment/warehouses/activity-summary?warehouseId=
+    response: "200 activity rows"
+    auth: X-Api-Key
+    behavior: FA-CAP-013 (usp_WarehouseActivitySummary; staff vs web by OrderSource)
+    status_codes: [200, 401]
+    idempotency: "safe (GET)"
+    depends_on: [usp_WarehouseActivitySummary, Orders, Customers, SalesAgents, Shipments, PickLists, InventoryAllocations]
+    compat_strategy: preserve_route
+    contract_tests: ["optional warehouseId filter; staff/web order counts by OrderSource"]
+
+infrastructure_endpoints:
+  - { route: "GET /health", auth: none, compat_strategy: preserve_route, note: "anonymous liveness" }
+  - { route: "/openapi, /swagger", auth: none, compat_strategy: preserve_route, note: "API docs; keep for existing clients/tooling" }
+
+internal_only_not_contracts:
+  description: >
+    Application-service methods (AllocateAsync, CreateShipmentWithPackageAsync, CheckoutAsync, etc.) and
+    CustomerPortal MVC routes are IMPLEMENTATION, not external contracts. They may be refactored freely
+    behind the preserved HTTP surface and the web UI.
+  examples: [CheckoutService.CheckoutAsync, OrderService.CancelOrderAsync, "CustomerPortal /Cart /Checkout /Orders MVC routes"]
+
+compatibility_strategy_overall:
+  phase1: >
+    preserve_via_adapter — host the existing 15 FulfillmentAPI routes verbatim (same paths, verbs,
+    request/response shapes, status codes, error bodies, X-Api-Key) in the consolidated app as a thin
+    compatibility controller layer that calls the SAME application services the warehouse web UI uses.
+  rationale: >
+    Routes, shapes, status codes, idempotency, and the {error}/problem+json formats are preserved so any
+    existing (unknown) API client keeps working unchanged.
+  contract_testing: >
+    Build a contract-test suite asserting each endpoint's route/verb/status/body/idempotency against the
+    current FulfillmentAPI behavior BEFORE refactoring internals.
+
+open_questions:
+  - id: OPEN-Q-CONSUMERS
+    question: "Who are the external consumers of /api/fulfillment/*? No client code or consumer is present in the repo. Are there carrier integrations or external warehouse systems that call these endpoints?"
+    why: "Determines how strictly the contract (incl. X-Api-Key) must be frozen and whether versioning/deprecation is needed."
+    status: unresolved
+    do_not_assume: "Do not invent consumers; treat the contract as frozen until confirmed."
+  - id: OPEN-Q-SEC
+    question: "The X-Api-Key scheme is flagged 'development, not production security'. What is the target production auth for these API routes (keep key, move to OAuth/mTLS, restrict network)?"
+    why: "Backward compatibility vs security hardening tradeoff."
+    status: unresolved
+  - id: OPEN-Q-RESP-SHAPE
+    question: "Several responses are anonymous objects. Are field names/casing part of the contract consumers depend on (e.g. PascalCase ProductId/QuantityOnHand)?"
+    why: "JSON casing/shape must be frozen in contract tests if external consumers exist."
+    status: unresolved
+
+summary:
+  external_contract_endpoints: 15
+  infrastructure_endpoints: 3
+  compat_strategy_default: preserve_via_adapter
+  invented_consumers: 0
+  unresolved_questions: 3

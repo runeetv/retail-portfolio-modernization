@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FulfillmentAPI.Api</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.22" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FulfillmentAPI.Application\FulfillmentAPI.Application.csproj" />
+    <ProjectReference Include="..\FulfillmentAPI.Domain\FulfillmentAPI.Domain.csproj" />
+    <ProjectReference Include="..\FulfillmentAPI.Infrastructure\FulfillmentAPI.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Shared\LegacyRetail.Common\LegacyRetail.Common.csproj" />
+  </ItemGroup>
+</Project>

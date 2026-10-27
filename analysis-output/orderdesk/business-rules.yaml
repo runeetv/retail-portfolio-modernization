@@ -1,0 +1,257 @@
+# OrderDesk — Business Rules (extracted from C#, SQL, DB constraints, tests)
+# location: csharp_domain | csharp_service | sql_procedure | db_constraint
+version: 1
+application: OrderDesk
+
+rules:
+  - id: OD-RULE-001
+    description: A new quote expires after a configurable number of days (default 14).
+    preconditions: [Quote is being created]
+    decision: ExpiresUtc = CreatedUtc + validityDays (default OrderDeskRules.DefaultQuoteValidityDays = 14)
+    effect: Quote carries an expiry used later to block conversion.
+    location: csharp_domain + csharp_service
+    implementation:
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:DefaultQuoteValidityDays
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:CreateQuoteAsync
+    capabilities: [OD-CAP-005]
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-RULE-002
+    description: Quote lines may be modified only while the quote is Draft or PendingApproval.
+    preconditions: [AddLine requested]
+    decision: Reject when QuoteStatus is not Draft and not PendingApproval.
+    effect: Returns failure "Lines can only be modified on draft/pending quotes."
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/QuoteService.cs:AddLineAsync
+    capabilities: [OD-CAP-006]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-003
+    description: Discounts strictly greater than 15% require an explicit approval; at/below 15% auto-approve.
+    preconditions: [ApplyDiscount requested with 0..100]
+    decision: RequiresDiscountApproval = discountPercent > 15
+    effect: >
+      If required: quote -> PendingApproval and a Pending DiscountApproval is created
+      (unless one already pending). Otherwise quote -> Approved.
+    location: csharp_domain + csharp_service
+    implementation:
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:DiscountApprovalThresholdPercent (15), RequiresDiscountApproval
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ApplyDiscountAsync
+    capabilities: [OD-CAP-007]
+    confidence: high
+    verification: behavior_verified   # OrderDeskRulesTests + OrderDeskWorkflowTests (25% routes to pending)
+
+  - id: OD-RULE-004
+    description: A discount approval can be decided only once.
+    preconditions: [DecideDiscount on a DiscountApproval]
+    decision: Reject if ApprovalStatus != 'Pending'.
+    effect: On approve -> quote Approved; on reject -> quote Rejected; records agent, DecisionUtc, notes.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/QuoteService.cs:DecideDiscountAsync
+    capabilities: [OD-CAP-008]
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-RULE-005
+    description: A quote may convert to an order only when Approved, not expired, and not already converted (C# pre-check).
+    preconditions: [ConvertToOrder requested]
+    decision: CanConvertToOrder = ConvertedOrderId is null AND status == 'Approved' AND not expired
+    effect: Blocks conversion with explanatory message before invoking the stored procedure.
+    location: csharp_domain
+    implementation:
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:CanConvertToOrder
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ConvertToOrderAsync
+    capabilities: [OD-CAP-009]
+    confidence: high
+    verification: behavior_verified
+
+  - id: OD-RULE-006
+    description: Quote-to-order conversion is authoritatively enforced in SQL — approved, not expired, convert-once.
+    preconditions: [usp_ConvertQuoteToOrder executed]
+    decision: >
+      THROW 50010 if quote missing; 50011 if already converted; 50012 if status != 'Approved';
+      50013 if ExpiresUtc < now.
+    effect: Rejects invalid conversions; prevents double conversion even under concurrency (UPDLOCK/HOLDLOCK).
+    location: sql_procedure + db_constraint
+    implementation:
+      - database/procedures/procedures.sql:usp_ConvertQuoteToOrder
+      - database/schema/02_orderdesk.sql:UQ_SalesQuotes_ConvertedOrder (filtered unique index)
+    capabilities: [OD-CAP-009]
+    confidence: high
+    verification: behavior_verified   # OrderDeskWorkflowTests.Quote_conversion_prevents_double_convert
+
+  - id: OD-RULE-007
+    description: Inventory availability = QuantityOnHand - QuantityAllocated; an order/line requires available >= quantity.
+    preconditions: [Availability check or staff-order line validation]
+    decision: available = OnHand - Allocated; reject staff order line if available < requested.
+    effect: Staff order creation fails "Insufficient stock for product {id}".
+    location: csharp_service + db_constraint
+    implementation:
+      - src/OrderDesk/OrderDesk.Application/CatalogService.cs:IsAvailableAsync/AvailableQuantityAsync
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CreateStaffOrderAsync (availability loop)
+      - database/schema/01_schema.sql:CK_Inventory_Alloc (QuantityAllocated <= QuantityOnHand)
+    capabilities: [OD-CAP-004, OD-CAP-010]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-008
+    description: On conversion, order line discount = UnitPrice * Quantity * (DiscountPercent/100).
+    preconditions: [usp_ConvertQuoteToOrder inserting order lines]
+    decision: LineDiscount computed per line from the quote discount percent.
+    effect: OrderLines carry a per-line discount derived from the quote's discount.
+    location: sql_procedure
+    implementation: database/procedures/procedures.sql:usp_ConvertQuoteToOrder (INSERT dbo.OrderLines SELECT ...)
+    capabilities: [OD-CAP-009]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-009
+    description: Commission = GrandTotal * agent CommissionRate, halved when discount >= 20%.
+    preconditions: [Order created via quote conversion]
+    decision: CommissionAmount = GrandTotal * Rate * (0.5 if DiscountPercent >= 20 else 1.0)
+    effect: One SalesCommission row inserted per converted order (unique per OrderId).
+    location: sql_procedure (authoritative) + csharp_domain (mirror)
+    implementation:
+      - database/procedures/procedures.sql:usp_ConvertQuoteToOrder (commission INSERT, CASE WHEN @Disc >= 20)
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:CalculateCommission (mirror for pre-check/tests)
+      - database/schema/02_orderdesk.sql:UQ_SalesCommissions_Order
+    capabilities: [OD-CAP-009, OD-CAP-015]
+    confidence: high
+    verification: behavior_verified   # OrderDeskRulesTests.CalculateCommission_halves_for_aggressive_discount
+
+  - id: OD-RULE-010
+    description: An order cannot be created unless the customer has mandatory info (non-empty Email AND ShipAddressLine).
+    preconditions: [Staff order creation or quote conversion]
+    decision: CustomerCanOrder = HasMandatoryOrderInfo (Email and ShipAddressLine both present)
+    effect: Blocks order creation/conversion with a "missing mandatory contact/shipping information" message.
+    location: duplicated (csharp_domain + csharp_service + sql_procedure)
+    implementation:
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:CustomerCanOrder; Entities.cs:Customer.HasMandatoryOrderInfo
+      - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ConvertToOrderAsync
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CreateStaffOrderAsync
+      - database/procedures/procedures.sql:usp_ConvertQuoteToOrder (THROW 50014)
+    capabilities: [OD-CAP-009, OD-CAP-010]
+    confidence: high
+    verification: behavior_verified   # OrderDeskWorkflowTests.Convert_fails_when_customer_missing_mandatory_info
+    notes: The same rule exists in C# and in SQL (a duplicated validation).
+
+  - id: OD-RULE-011
+    description: The catalog shows only non-discontinued products.
+    preconditions: [Browse catalog]
+    decision: Filter Where(!IsDiscontinued).
+    effect: Discontinued products are excluded from browse results.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/CatalogService.cs:BrowseAsync
+    capabilities: [OD-CAP-003]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-012
+    description: Adding an existing product to a quote increments its quantity rather than duplicating the line.
+    preconditions: [AddLine for a product already on the quote]
+    decision: If a line with the ProductId exists, Quantity += quantity; else add a new line at the product's current UnitPrice.
+    effect: One line per product; totals recalculated.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/QuoteService.cs:AddLineAsync
+    capabilities: [OD-CAP-006]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-013
+    description: Quote totals — SubTotal = sum(UnitPrice*Quantity); GrandTotal = round(SubTotal * (1 - DiscountPercent/100), 2).
+    preconditions: [Quote lines or discount changed]
+    decision: Recompute SubTotal and GrandTotal.
+    effect: Quote monetary fields updated.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/QuoteService.cs:RecalculateTotals
+    capabilities: [OD-CAP-006, OD-CAP-007]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-014
+    description: Staff cancellation eligibility — an order is eligible when status is Pending, Confirmed, or Allocated.
+    preconditions: [Cancel requested / eligibility checked]
+    decision: usp_EvaluateCancellationEligibility sets IsEligible=1 for Pending/Confirmed/Allocated; already-cancelled and later states are ineligible.
+    effect: Governs whether a normal (non-override) cancellation proceeds.
+    location: sql_procedure (authoritative) + csharp_domain (mirror)
+    implementation:
+      - database/procedures/procedures.sql:usp_EvaluateCancellationEligibility
+      - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:IsStaffCancellable (mirror)
+      - src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync/EvaluateEligibilityAsync
+    capabilities: [OD-CAP-012]
+    confidence: high
+    verification: behavior_verified   # OrderDeskWorkflowTests.Staff_cancellation_eligibility_allows_allocated_via_sql_rule
+
+  - id: OD-RULE-015
+    description: An ineligible order can be force-cancelled only by an agent with CanOverrideCancellation and a non-empty justification; an audit record is written.
+    preconditions: [Order not eligible for cancellation AND forceOverride=true]
+    decision: Require SalesAgent.CanOverrideCancellation == true AND overrideJustification non-empty.
+    effect: >
+      On success: insert CancellationOverride (OrderId, agent, PreviousStatus, Justification),
+      then set order to Cancelled. On failure: "not authorized" / "override requires a justification".
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync
+    capabilities: [OD-CAP-012]
+    confidence: high
+    verification: behavior_verified   # OrderDeskWorkflowTests.Cancellation_override_requires_authorized_agent_and_writes_audit
+
+  - id: OD-RULE-016
+    description: A staff-assisted order requires at least one line and a valid, existing sales agent and customer.
+    preconditions: [CreateStaffOrder]
+    decision: Reject empty line list; require customer exists; require agent exists.
+    effect: Returns failure before any write.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/OrderService.cs:CreateStaffOrderAsync
+    capabilities: [OD-CAP-010]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-017
+    description: An already-cancelled order cannot be cancelled again.
+    preconditions: [Cancel requested]
+    decision: Reject when OrderStatus == 'Cancelled'.
+    effect: Returns "Order already cancelled."
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync
+    capabilities: [OD-CAP-012]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-018
+    description: Only a return in 'Requested' status may be reviewed (approved/rejected).
+    preconditions: [Review requested]
+    decision: Reject when ReturnStatus != 'Requested'.
+    effect: On approve -> 'Approved'; on reject -> 'Rejected'; records ReviewedByAgentId and ReviewedUtc.
+    location: csharp_service
+    implementation: src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs:ReviewAsync
+    capabilities: [OD-CAP-013]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-019
+    description: A sales-agent task status must be one of Open, InProgress, Done, Cancelled.
+    preconditions: [UpdateStatus]
+    decision: Reject any value outside the allowed set.
+    effect: "'Invalid task status.' when out of set; otherwise status updated."
+    location: csharp_service + db_constraint
+    implementation:
+      - src/OrderDesk/OrderDesk.Application/AgentTaskService.cs:UpdateStatusAsync
+      - database/schema/02_orderdesk.sql:CK_SalesAgentTasks_Status
+    capabilities: [OD-CAP-014]
+    confidence: high
+    verification: static_verified
+
+  - id: OD-RULE-020
+    description: Customer contact update requires a non-empty Email.
+    preconditions: [UpdateContact]
+    decision: Reject when Email is blank.
+    effect: "'Email is required.' Email is also unique at the DB level (UQ_Customers_Email)."
+    location: csharp_service + db_constraint
+    implementation:
+      - src/OrderDesk/OrderDesk.Application/CustomerService.cs:UpdateContactAsync
+      - database/schema/01_schema.sql:UQ_Customers_Email
+    capabilities: [OD-CAP-002]
+    confidence: high
+    verification: static_verified

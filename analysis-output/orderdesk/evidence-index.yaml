@@ -1,0 +1,85 @@
+# OrderDesk — Evidence Index
+# Maps analysis IDs to the source/SQL/test evidence inspected. Paths are repo-relative.
+version: 1
+application: OrderDesk
+
+inspected_sources:
+  domain:
+    - src/OrderDesk/OrderDesk.Domain/Entities.cs
+    - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs
+    - src/OrderDesk/OrderDesk.Domain/OrderDesk.Domain.csproj
+  infrastructure:
+    - src/OrderDesk/OrderDesk.Infrastructure/OrderDeskDbContext.cs
+    - src/OrderDesk/OrderDesk.Infrastructure/OrderDeskContextFactory.cs
+    - src/OrderDesk/OrderDesk.Infrastructure/OrderDesk.Infrastructure.csproj
+  application:
+    - src/OrderDesk/OrderDesk.Application/CustomerService.cs
+    - src/OrderDesk/OrderDesk.Application/CatalogService.cs
+    - src/OrderDesk/OrderDesk.Application/QuoteService.cs
+    - src/OrderDesk/OrderDesk.Application/OrderService.cs
+    - src/OrderDesk/OrderDesk.Application/ReturnReviewService.cs
+    - src/OrderDesk/OrderDesk.Application/AgentTaskService.cs
+    - src/OrderDesk/OrderDesk.Application/Results.cs
+    - src/OrderDesk/OrderDesk.Application/OrderDesk.Application.csproj
+  desktop:
+    - src/OrderDesk/OrderDesk.Desktop/App.xaml
+    - src/OrderDesk/OrderDesk.Desktop/App.xaml.cs
+    - src/OrderDesk/OrderDesk.Desktop/AppServices.cs
+    - src/OrderDesk/OrderDesk.Desktop/Views/MainWindow.xaml
+    - src/OrderDesk/OrderDesk.Desktop/Views/MainWindow.xaml.cs
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/MainViewModel.cs
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/OrdersViewModel.cs
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/CustomersViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/ProductsViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/QuotesViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/ApprovalsViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/ReturnsViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/ViewModels/TasksViewModel.cs (referenced)
+    - src/OrderDesk/OrderDesk.Desktop/Mvvm/ObservableObject.cs
+    - src/OrderDesk/OrderDesk.Desktop/Mvvm/RelayCommand.cs
+    - src/OrderDesk/OrderDesk.Desktop/OrderDesk.Desktop.csproj
+  shared_infra:
+    - src/Shared/LegacyRetail.Common/DbConnectionConfig.cs
+  sql:
+    - database/schema/01_schema.sql   # shared tables used by OrderDesk
+    - database/schema/02_orderdesk.sql # OrderDesk-owned tables
+    - database/procedures/procedures.sql # usp_ConvertQuoteToOrder, usp_EvaluateCancellationEligibility (OrderDesk)
+  tests:
+    - tests/OrderDesk.Tests/OrderDeskRulesTests.cs
+    - tests/IntegrationTests/OrderDeskWorkflowTests.cs
+
+tests_executed:
+  - command: dotnet test tests/OrderDesk.Tests/OrderDesk.Tests.csproj
+    result: Passed 15/15
+    verifies: [OD-RULE-003, OD-RULE-005, OD-RULE-009, OD-RULE-010, OD-RULE-014]
+  - command: dotnet test tests/IntegrationTests (filter OrderDeskWorkflowTests)
+    result: Passed 5/5
+    verifies: [OD-CAP-005, OD-CAP-006, OD-CAP-007, OD-CAP-008, OD-CAP-009, OD-CAP-012,
+               OD-RULE-003, OD-RULE-006, OD-RULE-010, OD-RULE-014, OD-RULE-015]
+    environment: LegacyRetailDB on (localdb)\\MSSQLLocalDB (pre-provisioned, disposable test rows created by TestData)
+
+id_cross_reference:
+  capabilities_file: analysis-output/orderdesk/capabilities.yaml
+  entities_file: analysis-output/orderdesk/entities.yaml
+  rules_file: analysis-output/orderdesk/business-rules.yaml
+  workflows_file: analysis-output/orderdesk/workflows.yaml
+  dependencies_file: analysis-output/orderdesk/dependencies.yaml
+
+key_evidence_map:
+  OD-CAP-009:  # quote to order conversion
+    - src/OrderDesk/OrderDesk.Application/QuoteService.cs:ConvertToOrderAsync
+    - database/procedures/procedures.sql:usp_ConvertQuoteToOrder
+    - tests/IntegrationTests/OrderDeskWorkflowTests.cs:Quote_conversion_prevents_double_convert
+  OD-CAP-012:  # cancellation + override
+    - src/OrderDesk/OrderDesk.Application/OrderService.cs:CancelOrderAsync
+    - database/procedures/procedures.sql:usp_EvaluateCancellationEligibility
+    - tests/IntegrationTests/OrderDeskWorkflowTests.cs:Cancellation_override_requires_authorized_agent_and_writes_audit
+  OD-RULE-009: # commission
+    - database/procedures/procedures.sql:usp_ConvertQuoteToOrder
+    - src/OrderDesk/OrderDesk.Domain/OrderDeskRules.cs:CalculateCommission
+    - tests/OrderDesk.Tests/OrderDeskRulesTests.cs:CalculateCommission_halves_for_aggressive_discount
+
+unresolved_or_uninspected:
+  - "dbo.Shipments DDL: not present in the two schema files reviewed; external definition not inspected (out of scope)."
+  - "ViewModels (CustomersViewModel/ProductsViewModel/QuotesViewModel/ApprovalsViewModel/ReturnsViewModel/TasksViewModel): enumerated and partially inspected (OrdersViewModel fully read; others confirmed via MainWindow bindings + MainViewModel wiring)."
+  - "No UI command found that invokes OrderService.CreateStaffOrderAsync (see analysis-gaps GAP-001)."

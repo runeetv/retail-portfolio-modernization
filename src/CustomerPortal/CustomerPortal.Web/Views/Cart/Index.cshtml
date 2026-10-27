@@ -1,0 +1,65 @@
+@model CartViewModel
+@{
+    ViewData["Title"] = "Cart";
+}
+<h2>Your cart</h2>
+@if (!string.IsNullOrEmpty(Model.Message))
+{
+    <div class="alert alert-info">@Model.Message</div>
+}
+@if (Model.Cart.Items.Count == 0)
+{
+    <p>Your cart is empty. <a asp-controller="Catalog" asp-action="Index">Browse the shop</a>.</p>
+}
+else
+{
+    <table class="table">
+        <thead><tr><th>Product</th><th>Price</th><th>Qty</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var item in Model.Cart.Items)
+        {
+            <tr>
+                <td>@item.Product?.Name</td>
+                <td>@((item.Product?.UnitPrice ?? 0).ToString("C"))</td>
+                <td>
+                    <form asp-action="Update" method="post" class="d-flex">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="productId" value="@item.ProductId" />
+                        <input type="number" name="quantity" value="@item.Quantity" min="0" class="form-control form-control-sm" style="width:80px" />
+                        <button class="btn btn-sm btn-outline-secondary ms-1">Update</button>
+                    </form>
+                </td>
+                <td>
+                    <form asp-action="Remove" method="post">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="productId" value="@item.ProductId" />
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <div class="row">
+        <div class="col-md-6">
+            <form asp-action="ApplyCoupon" method="post" class="row g-2">
+                @Html.AntiForgeryToken()
+                <div class="col-auto"><input name="code" class="form-control" placeholder="Coupon code" value="@Model.AppliedCoupon" /></div>
+                <div class="col-auto"><button class="btn btn-outline-primary">Apply coupon</button></div>
+            </form>
+            @if (!string.IsNullOrEmpty(Model.AppliedCoupon))
+            {
+                <form asp-action="RemoveCoupon" method="post" class="mt-1">
+                    @Html.AntiForgeryToken()
+                    <small>Applied: <strong>@Model.AppliedCoupon</strong></small>
+                    <button class="btn btn-sm btn-link text-danger">remove</button>
+                </form>
+            }
+        </div>
+        <div class="col-md-6 text-end">
+            <h4>Subtotal: @Model.SubTotal.ToString("C")</h4>
+            <a asp-controller="Checkout" asp-action="Index" class="btn btn-success btn-lg">Checkout</a>
+        </div>
+    </div>
+}

@@ -1,0 +1,177 @@
+# FulfillmentAPI — Reconstructed end-to-end workflows
+version: 1
+application: FulfillmentAPI
+
+workflows:
+  - id: FA-WF-001
+    name: Order fulfillment (allocate -> pick -> pack -> dispatch -> track)
+    objective: Take a confirmed order and physically fulfill it through to dispatch and delivery tracking.
+    initiating_actor: Warehouse system / operator (API client with X-Api-Key)
+    entry_points:
+      - POST /api/fulfillment/inventory/allocate
+      - POST /api/fulfillment/picking/picklists
+      - POST /api/fulfillment/picking/items/{id}/pick
+      - POST /api/fulfillment/shipments
+      - PUT  /api/fulfillment/shipments/{id}/status
+      - POST /api/fulfillment/shipments/{id}/events
+    capabilities: [FA-CAP-003, FA-CAP-004, FA-CAP-005, FA-CAP-006, FA-CAP-007, FA-CAP-008]
+    entities: [FA-ENT-003, FA-ENT-005, FA-ENT-006, FA-ENT-007, FA-ENT-008, FA-ENT-009, FA-ENT-010, FA-ENT-011]
+    steps:
+      - Allocate inventory (usp_AllocateInventory): reserve stock; order Confirmed -> Allocated
+      - Create pick list from allocations (bins auto-assigned); order remains Allocated
+      - Mark items picked; order Allocated -> Picking; pick list -> Completed when all picked
+      - Create shipment package (all items picked required); shipment Packed; order -> Packed
+      - Dispatch (requires package + carrier + tracking); shipment Dispatched; order -> Shipped
+      - Record carrier events (idempotent); optionally transition InTransit -> Delivered; order -> Delivered
+    ordering_requirements: [allocate before pick; pick-all before package; package+carrier before dispatch]
+    state_transitions:
+      order: Confirmed -> Allocated -> Picking -> Packed -> Shipped -> Delivered
+      pick_list: Created -> InProgress -> Completed
+      shipment: (created) Packed -> Dispatched -> InTransit -> Delivered
+    db_operations:
+      read: [Orders, OrderLines, InventoryAllocations, Warehouses, WarehouseBins, PickLists, PickListItems, Shipments, ShipmentPackages, Inventory]
+      write: [Inventory, InventoryAllocations, Orders, PickLists, PickListItems, Shipments, ShipmentPackages, CarrierEvents]
+      execute: [usp_AllocateInventory]
+    stored_procedures: [usp_AllocateInventory]
+    transaction_boundaries:
+      - usp_AllocateInventory runs its own BEGIN TRAN with XACT_ABORT + UPDLOCK/HOLDLOCK
+      - EF SaveChanges per picking/packaging/dispatch operation (no explicit multi-step EF transaction)
+    error_paths:
+      - allocate: order/warehouse not found (404); cancelled (409/50021); insufficient stock (409/50022)
+      - pick list: no allocation (409); cancelled (409); duplicate pick list (409)
+      - package: not all picked (409); duplicate package code (409); cancelled (409)
+      - dispatch: invalid transition (409); missing package/carrier (409)
+    external_dependencies: [EXT-ORDERS, EXT-INVENTORY]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/{AllocationService,PickingService,ShipmentService}.cs
+      - database/procedures/procedures.sql:usp_AllocateInventory
+      - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Full_warehouse_flow_allocate_pick_package_dispatch
+    confidence: high
+    verification: behavior_verified
+    mermaid: |
+      flowchart TD
+        A[POST allocate] --> B{order found and not cancelled and stock available?}
+        B -- No --> X[404 / 409]
+        B -- Yes --> C[Reserve stock; order -> Allocated]
+        C --> D[POST picklists]
+        D --> E{allocation exists and no existing pick list?}
+        E -- No --> X2[409]
+        E -- Yes --> F[Pick list Created with items + bins]
+        F --> G[POST items/pick]
+        G --> H[order -> Picking; pick list -> Completed when all picked]
+        H --> I[POST shipments]
+        I --> J{all items picked and package code unique?}
+        J -- No --> X3[409]
+        J -- Yes --> K[Shipment Packed; order -> Packed]
+        K --> L[PUT status Dispatched]
+        L --> M{package + carrier + tracking present?}
+        M -- No --> X4[409]
+        M -- Yes --> N[Shipment Dispatched; order -> Shipped]
+        N --> O[POST events; transition to Delivered]
+        O --> P[order -> Delivered]
+
+  - id: FA-WF-002
+    name: Inventory allocation (standalone)
+    objective: Reserve warehouse stock for an order without over-allocating.
+    initiating_actor: Warehouse system
+    entry_points: [POST /api/fulfillment/inventory/allocate]
+    capabilities: [FA-CAP-003]
+    entities: [FA-ENT-005, FA-ENT-006, FA-ENT-003]
+    steps:
+      - Validate warehouse + order exist (C#)
+      - Execute usp_AllocateInventory under UPDLOCK/HOLDLOCK
+      - For each not-yet-allocated product: verify Avail >= Need, increment QuantityAllocated, insert allocation
+      - If order Pending/Confirmed, set Allocated
+    decision_points: [order found?, cancelled?, each product has enough available?]
+    state_transitions:
+      order: (Pending|Confirmed) -> Allocated
+      inventory_allocation: (created) Allocated
+    db_operations:
+      read: [Orders, OrderLines, Inventory, InventoryAllocations, Warehouses]
+      write: [Inventory, InventoryAllocations, Orders]
+      execute: [usp_AllocateInventory]
+    transaction_boundaries: [single SQL transaction in the procedure; rolls back entirely on insufficient stock]
+    error_paths: [50020 not found, 50021 cancelled, 50022 insufficient]
+    external_dependencies: [EXT-ORDERS, EXT-INVENTORY]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/AllocationService.cs
+      - database/procedures/procedures.sql:usp_AllocateInventory
+      - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Allocation_reserves_stock_and_blocks_over_allocation
+    confidence: high
+    verification: behavior_verified
+
+  - id: FA-WF-003
+    name: Return receipt & inventory adjustment
+    objective: Physically receive an approved return, restock inventory, and record adjustments.
+    initiating_actor: Warehouse operator
+    entry_points: [POST /api/fulfillment/returns/receive]
+    capabilities: [FA-CAP-010]
+    entities: [FA-ENT-012, FA-ENT-013, FA-ENT-014, FA-ENT-005]
+    steps:
+      - Validate warehouse + return exist (C#)
+      - Execute usp_ReceiveReturnAndAdjust
+      - If already received, return existing receipt (idempotent)
+      - Require return status 'Approved' (else 50031)
+      - Insert ReturnReceipt ('Restocked'); add return-line quantities to Inventory.QuantityOnHand
+      - Insert WarehouseAdjustments; set Returns.ReturnStatus = 'Received'
+    decision_points: [return found?, already received?, status Approved?]
+    state_transitions:
+      return: Approved -> Received
+      return_receipt: (created) Restocked
+    db_operations:
+      read: [Warehouses, Returns, ReturnReceipts, ReturnLines]
+      write: [ReturnReceipts, Inventory, WarehouseAdjustments, Returns]
+      execute: [usp_ReceiveReturnAndAdjust]
+    transaction_boundaries: [single SQL transaction (XACT_ABORT); idempotent short-circuit commits with no changes]
+    error_paths: [50030 return not found, 50031 not approved]
+    external_dependencies: [EXT-RETURNS]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/ReturnReceiptService.cs
+      - database/procedures/procedures.sql:usp_ReceiveReturnAndAdjust
+      - tests/IntegrationTests/FulfillmentWorkflowTests.cs:Return_receipt_restocks_inventory_and_is_idempotent_and_requires_approval
+    confidence: high
+    verification: behavior_verified
+    notes: >
+      Return creation and approval occur outside this application; the procedure requires
+      an 'Approved' status as its entry precondition. Receipt does NOT change refund state.
+    mermaid: |
+      flowchart TD
+        A[POST returns/receive] --> B{warehouse and return exist?}
+        B -- No --> X[404]
+        B -- Yes --> C{already received?}
+        C -- Yes --> R[Return existing receipt - idempotent]
+        C -- No --> D{status Approved?}
+        D -- No --> X2[409 - 50031]
+        D -- Yes --> E[Insert ReturnReceipt 'Restocked']
+        E --> F[Inventory.OnHand += returned qty]
+        F --> G[Insert WarehouseAdjustments]
+        G --> H[Returns.ReturnStatus = Received]
+
+  - id: FA-WF-004
+    name: Warehouse activity reporting
+    objective: Report per-warehouse throughput across fulfillment and related domains.
+    initiating_actor: Operations / reporting consumer
+    entry_points: [GET /api/fulfillment/warehouses/activity-summary]
+    capabilities: [FA-CAP-013]
+    entities: [FA-ENT-001]
+    steps:
+      - Execute usp_WarehouseActivitySummary (optionally filtered by warehouse)
+      - Aggregate counts of pick lists, shipments, allocations, orders, staff vs web orders, customers, agents
+    decision_points: [optional warehouse filter]
+    state_transitions: {}
+    db_operations:
+      read: [Warehouses, PickLists, InventoryAllocations, Orders, Shipments, Customers, SalesAgents]
+      write: []
+      execute: [usp_WarehouseActivitySummary]
+    transaction_boundaries: [read-only query]
+    error_paths: []
+    external_dependencies: [EXT-ORDERS, EXT-CUSTOMERS, EXT-SALESAGENTS]
+    evidence:
+      - src/FulfillmentAPI/FulfillmentAPI.Application/FulfillmentQueryService.cs:GetActivitySummaryAsync
+      - database/procedures/procedures.sql:usp_WarehouseActivitySummary
+    confidence: high
+    verification: static_verified
+    notes: >
+      The procedure joins fulfillment-owned tables with shared Orders/Customers and the
+      externally-owned SalesAgents table (via Orders.PlacedByAgentId). This is a cross-domain
+      reporting join; the function of the applications that populate SalesAgents is not inferred.

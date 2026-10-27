@@ -1,0 +1,3 @@
+/* Minimal custom styles layered on top of Bootstrap. */
+body { padding-bottom: 2rem; }
+.card-title { font-size: 1.05rem; }

@@ -1,0 +1,61 @@
+@model CustomerPortal.Domain.CustomerOrder
+@{
+    ViewData["Title"] = Model.OrderNumber;
+    var shipments = ViewBag.Shipments as List<CustomerPortal.Domain.TrackedShipment> ?? new();
+    bool canCancel = Model.OrderStatus is "Pending" or "Confirmed";
+}
+<h1>Order @Model.OrderNumber</h1>
+<div class="card">
+    <p><strong>Status:</strong> @Model.OrderStatus · <strong>Source:</strong> @Model.OrderSource</p>
+    <p><strong>Subtotal:</strong> @Model.SubTotal.ToString("C") · <strong>Discount:</strong> @Model.DiscountTotal.ToString("C") · <strong>Total:</strong> @Model.GrandTotal.ToString("C")</p>
+    @if (!string.IsNullOrEmpty(Model.CancelReason)) { <p><strong>Cancel reason:</strong> @Model.CancelReason</p> }
+</div>
+
+<h3>Lines</h3>
+<table>
+    <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+    <tbody>
+    @foreach (var l in Model.Lines)
+    {
+        <tr><td>@(l.Product?.Name ?? ("#" + l.ProductId))</td><td>@l.Quantity</td><td>@l.UnitPrice.ToString("C")</td></tr>
+    }
+    </tbody>
+</table>
+
+<h3>Tracking</h3>
+@if (shipments.Count == 0) { <p>No shipments yet.</p> }
+else
+{
+    foreach (var s in shipments)
+    {
+        <div class="card">
+            <p><strong>@CustomerPortal.Application.TrackingService.FriendlyStatus(s.ShipmentStatus)</strong>
+               @if (!string.IsNullOrEmpty(s.Carrier)) { <span>· @s.Carrier @s.TrackingNumber</span> }</p>
+            <ul>
+            @foreach (var e in s.Events.OrderByDescending(e => e.EventUtc))
+            {
+                <li>@e.EventUtc.ToString("g") — @e.EventCode @e.Description</li>
+            }
+            </ul>
+        </div>
+    }
+}
+
+<div class="card">
+    @if (canCancel)
+    {
+        <form class="inline" method="post" asp-action="Cancel" asp-route-id="@Model.OrderId">
+            @Html.AntiForgeryToken()
+            <input name="reason" placeholder="Reason (optional)" />
+            <button class="btn secondary" type="submit">Cancel order</button>
+        </form>
+    }
+    @if (Model.OrderStatus == "Delivered")
+    {
+        <form class="inline" method="post" asp-action="RequestReturn" asp-route-id="@Model.OrderId">
+            @Html.AntiForgeryToken()
+            <input name="reason" placeholder="Return reason (optional)" />
+            <button class="btn secondary" type="submit">Request return</button>
+        </form>
+    }
+</div>

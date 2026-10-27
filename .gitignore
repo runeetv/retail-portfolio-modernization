@@ -1,0 +1,103 @@
+## ---------------------------------------------------------------------------
+## .gitignore for retail-portfolio-modernization (.NET 10)
+## ---------------------------------------------------------------------------
+
+## Build output
+bin/
+obj/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+build/
+bld/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+
+## .NET
+project.lock.json
+project.fragment.lock.json
+*.binlog
+*.nuget.props
+*.nuget.targets
+.dotnet/
+
+## Publish output
+publish/
+*.[Pp]ublish.xml
+*.azurePubxml
+PublishScripts/
+
+## Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.sln.docstates
+*.rsuser
+*_i.c
+*_p.c
+*.ncb
+*.aps
+*.cache
+*.ilk
+*.pdb
+
+## Test results / coverage
+[Tt]est[Rr]esult*/
+TestResults/
+*.trx
+*.coverage
+*.coverpackage
+coverage*.json
+coverage*.xml
+coverage*.info
+
+## NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.dgspec.json
+
+## ------------------------------------------------------------------
+## Secrets & local configuration — NEVER commit real credentials
+## ------------------------------------------------------------------
+# Local environment / secret files
+*.env
+.env.*
+secrets.json
+appsettings.*.local.json
+appsettings.Local.json
+# User-specific / machine-specific overrides
+appsettings.Development.local.json
+# Certificates and keys
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+# ASP.NET Core user secrets are stored outside the repo by default, but ignore any local copy:
+**/UserSecrets/
+
+## Databases / local data (never commit a provisioned DB file)
+*.mdf
+*.ldf
+*.ndf
+*.sqlite
+*.db
+
+## OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Project-specific scratch
+_yamlcheck/
