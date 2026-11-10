@@ -117,6 +117,11 @@ application** over the same database.
 See **[`ModernizationStep.md`](ModernizationStep.md)** for the full narrative with links to every prompt
 and artifact. The prompts themselves live under [`Prompts/`](Prompts).
 
+**Try it yourself with Kiro:** a step-by-step hands-on tutorial for re-running the whole
+modernization in the [Kiro](https://kiro.dev) AI IDE is in
+[`docs/tutorial/`](docs/tutorial) (Word: `Kiro-Legacy-Modernization-Tutorial.docx`,
+PDF: `Kiro-Legacy-Modernization-Tutorial.pdf`, Markdown source: `Kiro-Legacy-Modernization-Tutorial.md`).
+
 ### Run the unified application
 ```powershell
 # provision the DB (once), then run the single consolidated host

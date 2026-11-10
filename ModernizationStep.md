@@ -96,6 +96,8 @@ code-computed metrics.
 - **Prompts:**
   - [`Prompts/Stage 3. GroundTruth/07.GroundTruth.md`](Prompts/Stage%203.%20GroundTruth/07.GroundTruth.md)
   - [`Prompts/Stage 3. GroundTruth/07.5GroundTruth2.md`](Prompts/Stage%203.%20GroundTruth/07.5GroundTruth2.md)
+    — note: despite its folder, this file holds *Stage 3-informed add-on requirements for Stage 4*;
+      append it to the Stage 4 prompt. `07.GroundTruth.md` was reconstructed from the Stage 3 artifacts.
 - **Benchmark used:** [`benchmark/ground-truth/`](benchmark/ground-truth)
 - **Produced** — [`evaluation-output/`](evaluation-output):
   - `evaluation-summary.md`, `scorecard.yaml`, `capability-matches.yaml`, `entity-matches.yaml`,
